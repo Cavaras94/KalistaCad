@@ -1,0 +1,26 @@
+{
+  "name": "planimetrie",
+  "version": "0.1.0",
+  "description": "Disegno 2D di planimetrie con stampa in scala",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "e2e": "node test/e2e.mjs"
+  },
+  "license": "UNLICENSED",
+  "type": "module",
+  "dependencies": {
+    "@mlightcad/libredwg-web": "^0.7.16",
+    "dxf-parser": "^1.1.2"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.3"
+  },
+  "private": true
+}

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Planimetrie</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Crect width='20' height='20' rx='3' fill='%231b1f26'/%3E%3Cpath d='M3 3h14v14H3z M3 10h7v7' fill='none' stroke='%234da3ff' stroke-width='2'/%3E%3C/svg%3E">
+</head>
+<body>
+  <div id="app">
+    <header id="toolbar"></header>
+    <main id="main">
+      <div id="canvas-wrap">
+        <canvas id="base"></canvas>
+        <canvas id="overlay"></canvas>
+        <div id="tip"></div>
+      </div>
+      <aside id="side">
+        <section id="props-panel" class="panel">
+          <h2>Proprietà</h2>
+          <div id="props"></div>
+        </section>
+        <section id="layers-panel" class="panel">
+          <h2>Layer</h2>
+          <div id="layers"></div>
+        </section>
+      </aside>
+    </main>
+    <section id="cmd">
+      <div id="history"></div>
+      <div id="cmdline">
+        <span id="prompt"></span>
+        <input id="cmdinput" autocomplete="off" spellcheck="false" aria-label="Riga di comando">
+        <div id="suggest"></div>
+      </div>
+    </section>
+    <footer id="status"></footer>
+  </div>
+  <div id="dialog-root"></div>
+  <div id="print-root"></div>
+  <input type="file" id="file-input" hidden>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
