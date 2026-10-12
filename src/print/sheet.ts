@@ -32,6 +32,8 @@ export interface PrintOpts {
   wallFill: WallFill;
   title: boolean;
   fields: TitleFields;
+  /** logo da mettere nel cartiglio (dati dell'immagine) */
+  logo?: string;
 }
 
 export interface Sheet {
@@ -101,13 +103,13 @@ export function buildSheet(doc: Doc, o: PrintOpts): Sheet {
   for (const e of ents) {
     const l = layers.get(e.layer) ?? doc.layers[0];
     const color = printColor(e.color ?? l.color, o.mono);
-    const lw = o.lineweights ? Math.max(0.05, l.lw) : 0.18;
-    const dash = LT_PATTERNS[l.lt].map(x => x * doc.settings.ltScale);
+    const lw = o.lineweights ? Math.max(0.05, e.lw ?? l.lw) : 0.18;
+    const dash = LT_PATTERNS[e.lt ?? l.lt].map(x => x * doc.settings.ltScale);
     const strokeAttr = `stroke="${color}" stroke-width="${f(lw)}"${dash.length ? ` stroke-dasharray="${dash.map(f).join(' ')}"` : ''}`;
     for (const p of entPrims(e, ctx)) out.push(primSvg(p, X, Y, k, color, strokeAttr, wallFill));
   }
 
-  const tb = o.title ? titleBlock(W, H, scale, o.fields) : '';
+  const tb = o.title ? titleBlock(W, H, scale, o.fields, o.logo) : '';
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}mm" height="${H}mm" viewBox="0 0 ${W} ${H}" font-family="Arial, Helvetica, sans-serif">
 <rect x="0" y="0" width="${W}" height="${H}" fill="#fff"/>
 <defs><clipPath id="vp"><rect x="${f(vp.x)}" y="${f(vp.y)}" width="${f(vp.w)}" height="${f(vp.h)}"/></clipPath></defs>
@@ -133,6 +135,10 @@ function primSvg(p: Prim, X: (x: number) => number, Y: (y: number) => number, k:
       }
       return `<path d="${d}" ${stroke}/>`;
     }
+    case 'img': {
+      const deg = (-p.rot * 180) / Math.PI;
+      return `<image href="${esc(p.src)}" x="0" y="${f(-p.h * k)}" width="${f(p.w * k)}" height="${f(p.h * k)}" preserveAspectRatio="none" transform="translate(${f(X(p.p.x))} ${f(Y(p.p.y))}) rotate(${f(deg)})"/>`;
+    }
     case 'area': {
       const d = p.loops.map(l => l.map((q, i) => `${i ? 'L' : 'M'}${f(X(q.x))} ${f(Y(q.y))}`).join('') + 'Z').join('');
       if (p.fill === 'tint') return '';
@@ -154,9 +160,12 @@ function primSvg(p: Prim, X: (x: number) => number, Y: (y: number) => number, k:
   }
 }
 
-function titleBlock(W: number, H: number, scale: number, t: TitleFields): string {
-  const w = Math.min(TB_W, W - 2 * MARGIN);
-  const x0 = W - MARGIN - w, y0 = H - MARGIN - TB_H;
+function titleBlock(W: number, H: number, scale: number, t: TitleFields, logo?: string): string {
+  const full = Math.min(TB_W, W - 2 * MARGIN);
+  const xb = W - MARGIN - full, y0 = H - MARGIN - TB_H;
+  // con il logo, la prima parte del cartiglio è un riquadro per lui
+  const lw = logo ? Math.min(TB_H * 1.4, full * 0.3) : 0;
+  const w = full - lw, x0 = xb + lw;
   const left = w * 0.66;
   const cell = (x: number, y: number, cw: number, ch: number, label: string, value: string, size: number) =>
     `<rect x="${f(x)}" y="${f(y)}" width="${f(cw)}" height="${f(ch)}" fill="none" stroke="#000" stroke-width="0.25"/>` +
@@ -164,7 +173,8 @@ function titleBlock(W: number, H: number, scale: number, t: TitleFields): string
     `<text x="${f(x + 1.2)}" y="${f(y + ch - 1.6)}" font-size="${size}" fill="#000">${esc(value)}</text>`;
   const rh = TB_H / 4;
   const parts = [
-    `<rect x="${f(x0)}" y="${f(y0)}" width="${f(w)}" height="${TB_H}" fill="#fff" stroke="#000" stroke-width="0.5"/>`,
+    `<rect x="${f(xb)}" y="${f(y0)}" width="${f(full)}" height="${TB_H}" fill="#fff" stroke="#000" stroke-width="0.5"/>`,
+    ...(logo ? [`<image href="${esc(logo)}" x="${f(xb + 1.5)}" y="${f(y0 + 1.5)}" width="${f(lw - 3)}" height="${f(TB_H - 3)}" preserveAspectRatio="xMidYMid meet"/>`] : []),
     cell(x0, y0, left, rh, 'PROGETTO', t.progetto, 3),
     cell(x0, y0 + rh, left, rh * 2, 'OGGETTO', t.titolo, 5),
     cell(x0, y0 + rh * 3, left, rh, 'COMMITTENTE / INDIRIZZO', [t.committente, t.indirizzo].filter(Boolean).join(' – '), 2.6),

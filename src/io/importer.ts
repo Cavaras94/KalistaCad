@@ -1,6 +1,6 @@
 // Conversione di disegni DXF/DWG nelle entità del programma.
-import type { Ent, NewEnt, HAlign, VAlign } from '../model/entities';
-import { transform, entBox } from '../model/entities';
+import type { Ent, NewEnt, HAlign, VAlign, Blocks } from '../model/entities';
+import { transform, entBox, DEFAULT_CTX } from '../model/entities';
 import type { Layer, LineType, Units } from '../model/document';
 import { UNIT_MM } from '../model/document';
 import {
@@ -38,6 +38,8 @@ export interface RawDrawing {
 export interface ImportResult {
   ents: NewEnt[];
   layers: Layer[];
+  /** definizioni dei blocchi usati dagli inserimenti in ents */
+  blocks: Blocks;
   srcUnits: Units | null;
   scale: number;
   skipped: Map<string, number>;
@@ -114,8 +116,31 @@ class Builder {
   skipped = new Map<string, number>();
   warnings: string[] = [];
   private group = 0;
+  /** blocchi del file diventati blocchi di Kalista (quelli inseriti in modo semplice) */
+  blocks: Blocks = {};
+  private building = new Set<string>();
 
-  constructor(private drawing: RawDrawing) {}
+  /** unit = fattore fra le unità del file e quelle del disegno, già dentro le definizioni dei blocchi */
+  constructor(private drawing: RawDrawing, private unit = 1) {}
+
+  /** Costruisce la definizione di un blocco del file. false se non si può (manca, o contiene se stesso). */
+  private define(name: string): boolean {
+    if (this.blocks[name]) return true;
+    const blk = this.drawing.blocks.get(name);
+    if (!blk || this.building.has(name)) return false;
+    this.building.add(name);
+    const outer = this.ents;
+    this.ents = [];
+    // dentro la definizione il punto base va nell'origine; il layer 0 resta 0 e prenderà quello dell'inserimento
+    this.walk(blk.ents, compose(scaleAbout(v(0, 0), this.unit), translate(-blk.base.x, -blk.base.y)), null, undefined, 1, undefined);
+    const ents = this.ents.map((e, i) => ({ ...e, id: i + 1 }) as Ent);
+    this.ents = outer;
+    this.building.delete(name);
+    // un blocco senza niente di disegnabile (solo definizioni di attributi) non diventa un blocco
+    if (!ents.length) return false;
+    this.blocks[name] = { ents };
+    return true;
+  }
 
   skip(t: string) { this.skipped.set(t, (this.skipped.get(t) ?? 0) + 1); }
 
@@ -140,7 +165,9 @@ class Builder {
   }
 
   private one(e: RawEnt, m: Mat, layer: string, color: string | undefined, depth: number, g: number | undefined) {
-    const base = color ? { layer, color } : { layer };
+    const base: { layer: string; color?: string; lt?: LineType } = color ? { layer, color } : { layer };
+    // tipo di linea dato alla singola entità (non DaLayer né DaBlocco)
+    if (e.lineType && !/^BY(LAYER|BLOCK)$/i.test(e.lineType)) base.lt = mapLineType(e.lineType);
     const P = (p: Vec) => apply(m, p);
     const uniform = isUniform(m);
     const mirror = det(m) < 0;
@@ -189,7 +216,13 @@ class Builder {
         if (R <= 0) break;
         const rot = Math.atan2(e.major.y, e.major.x);
         const full = Math.abs(sweep(e.a0, e.a1) - TAU) < 1e-6 || Math.abs(e.a1 - e.a0) < 1e-9;
-        if (full && uniform) { this.push({ ...base, t: 'ellipse', c: P(e.c), a: applyDir(m, e.major), k: e.ratio }, g); break; }
+        if (uniform) {
+          const el: NewEnt = { ...base, t: 'ellipse', c: P(e.c), a: applyDir(m, e.major), k: e.ratio };
+          // arco di ellisse: allo specchio il verso di percorrenza si inverte
+          if (!full && el.t === 'ellipse') { el.a0 = mirror ? -e.a1 : e.a0; el.a1 = mirror ? -e.a0 : e.a1; }
+          this.push(el, g);
+          break;
+        }
         const sw = full ? TAU : sweep(e.a0, e.a1);
         const n = Math.max(24, Math.ceil(sw / (Math.PI / 48)));
         const pts: Vec[] = [];
@@ -235,8 +268,21 @@ class Builder {
         const blk = this.drawing.blocks.get(e.name);
         if (!blk) { this.skip(`blocco mancante ${e.name}`); break; }
         if (depth > 12) { this.warnings.push(`Blocchi annidati troppo in profondità (${e.name}).`); break; }
-        const gid = g ?? ++this.group;
         const cols = Math.max(1, e.cols || 1), rows = Math.max(1, e.rows || 1);
+        const sx = e.sx || 1, sy = e.sy || 1;
+        // Inserimento semplice (una copia, stessa scala nei due versi, senza attributi, blocco con un nome
+        // vero): resta un blocco, modificabile. Gli altri casi si aprono nelle loro entità, raggruppate.
+        // (un inserimento con un colore suo resta aperto: nel blocco quel colore vale solo per ciò che è
+        // DaBlocco, e nella definizione DaBlocco e DaLayer non si distinguono più)
+        const simple = g === undefined && color === undefined && cols === 1 && rows === 1 && !e.attribs.length && !e.name.startsWith('*')
+          && Math.abs(Math.abs(sx) - Math.abs(sy)) < 1e-9 * Math.abs(sx) && uniform && !mirror;
+        if (simple && this.define(e.name)) {
+          const ins: NewEnt = { ...base, t: 'insert', name: e.name, p: P(e.p), s: (Math.abs(sx) * matScale(m)) / this.unit, rot: mapAngle(m, e.rot) + (sy < 0 ? Math.PI : 0) };
+          if (sx < 0 !== sy < 0) ins.flip = true;
+          this.push(ins, g);
+          break;
+        }
+        const gid = g ?? ++this.group;
         for (let r = 0; r < rows; r++) {
           for (let c = 0; c < cols; c++) {
             const off = v(c * (e.colSp || 0), r * (e.rowSp || 0));
@@ -283,15 +329,19 @@ export function rescaleImport(r: ImportResult, src: Units, docUnits: Units): Imp
   const warnings = r.warnings.filter(w => !w.includes('non dichiara le unità'));
   if (Math.abs(f - 1) < 1e-12) return { ...r, warnings, srcUnits: src, scale };
   const m = scaleAbout(v(0, 0), f);
-  const ents = r.ents.map(e => { const { id: _id, ...rest } = transform({ ...e, id: 0 } as Ent, m); return rest as NewEnt; });
-  return { ...r, ents, warnings, srcUnits: src, scale };
+  // di un inserimento si sposta solo il punto: la scala la porta la definizione del blocco, riscalata anche lei
+  const conv = (e: Ent): Ent => (e.t === 'insert' ? { ...e, p: v(e.p.x * f, e.p.y * f) } : transform(e, m));
+  const ents = r.ents.map(e => { const { id: _id, ...rest } = conv({ ...e, id: 0 } as Ent); return rest as NewEnt; });
+  const blocks = Object.fromEntries(Object.entries(r.blocks).map(([k, d]) => [k, { ents: d.ents.map(conv) }]));
+  return { ...r, ents, blocks, warnings, srcUnits: src, scale };
 }
 
 /** Larghezza e altezza del disegno importato, nelle unità del file. */
 export function importSize(r: ImportResult): { w: number; h: number } | null {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const ctx = { ...DEFAULT_CTX, blocks: r.blocks };
   for (const e of r.ents) {
-    const b = entBox({ ...e, id: 0 } as Ent);
+    const b = entBox({ ...e, id: 0 } as Ent, ctx);
     if (b.x0 > b.x1 || b.y0 > b.y1) continue;
     x0 = Math.min(x0, b.x0); y0 = Math.min(y0, b.y0); x1 = Math.max(x1, b.x1); y1 = Math.max(y1, b.y1);
   }
@@ -328,16 +378,16 @@ export function buildImport(d: RawDrawing, docUnits: Units): ImportResult {
     locked: false,
   }));
   const lc = new Map(layers.map(l => [l.name, l.color]));
-  const b = new Builder(d);
+  const b = new Builder(d, scale);
   const m0 = scale === 1 ? IDENT : scaleAbout(v(0, 0), scale);
   b.walk(d.ents, m0, null, undefined, 0, undefined);
-  for (const e of b.ents) if (!lc.has(e.layer)) {
+  for (const e of [...b.ents, ...Object.values(b.blocks).flatMap(x => x.ents)]) if (!lc.has(e.layer)) {
     lc.set(e.layer, '#ffffff');
     layers.push({ name: e.layer, color: '#ffffff', lw: 0.25, lt: 'continuous', visible: true, locked: false });
   }
   const warnings = [...b.warnings];
   if (!srcUnits) warnings.push('Il file non dichiara le unità: le coordinate sono state prese così come sono.');
-  return { ents: b.ents, layers, srcUnits, scale, skipped: b.skipped, warnings };
+  return { ents: b.ents, blocks: b.blocks, layers, srcUnits, scale, skipped: b.skipped, warnings };
 }
 
 // ---------------------------------------------------------------- adattatore DXF (dxf-parser)
@@ -380,6 +430,8 @@ function unflip(e: RawEnt): RawEnt {
     case 'CIRCLE': return { ...e, c: fx(e.c) };
     case 'ARC': return { ...e, c: fx(e.c), a0: Math.PI - e.a1, a1: Math.PI - e.a0 };
     case 'SOLID': return { ...e, pts: e.pts.map(fx) };
+    // l'ellisse ha già centro e asse nel sistema del disegno: cambia solo il verso in cui si percorre l'arco
+    case 'ELLIPSE': return { ...e, a0: -e.a1, a1: -e.a0 };
     case 'INSERT': return { ...e, p: fx(e.p), sx: -e.sx, rot: -e.rot };
     default: return e;
   }
@@ -402,6 +454,7 @@ function common(e: AnyObj): RawBase {
 }
 
 function fromDxfEntity(e: AnyObj, out: RawEnt[], skip: (t: string) => void) {
+  if (e.visible === false) return; // entità resa invisibile nel file (gruppo 60)
   const first = out.length;
   dxfEntity(e, out, skip);
   if (negZ(e)) for (let i = first; i < out.length; i++) out[i] = unflip(out[i]);
@@ -516,6 +569,7 @@ function hatchLoops(e: AnyObj): Vec[][] {
 }
 
 function fromDwgEntity(e: AnyObj, out: RawEnt[], skip: (t: string) => void) {
+  if (e.isVisible === false) return; // entità resa invisibile nel file
   const first = out.length;
   dwgEntity(e, out, skip);
   if (negZ(e)) for (let i = first; i < out.length; i++) out[i] = unflip(out[i]);

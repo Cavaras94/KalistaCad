@@ -17,6 +17,8 @@ export interface WallCtx {
   walls: Map<number, WallInfo>;
   /** spessore del muro che ospita ciascuna apertura */
   openTh: Map<number, number>;
+  /** muro che ospita ciascuna apertura (id apertura → id muro) */
+  hosts: Map<number, number>;
 }
 
 const KEY = (p: Vec) => `${Math.round(p.x * 1e4)}:${Math.round(p.y * 1e4)}`;
@@ -30,6 +32,7 @@ export function buildWallCtx(ents: readonly Ent[]): WallCtx {
   const walls = ents.filter((e): e is WallE => e.t === 'wall' && dist(e.a, e.b) > 1e-9);
   const info = new Map<number, WallInfo>();
   const openTh = new Map<number, number>();
+  const hosts = new Map<number, number>();
   const ends = new Map<string, { w: WallE; end: 's' | 'e' }[]>();
 
   for (const w of walls) {
@@ -119,10 +122,11 @@ export function buildWallCtx(ents: readonly Ent[]): WallCtx {
       if (s < -1e-6 || s > L + 1e-6 || Math.abs(dot(sub(o.p, W.a), n)) > h + 1e-6) continue;
       info.get(W.id)!.cuts.push([Math.max(0, s - o.w / 2), Math.min(L, s + o.w / 2)]);
       openTh.set(o.id, W.th);
+      hosts.set(o.id, W.id);
       break;
     }
   }
-  return { walls: info, openTh };
+  return { walls: info, openTh, hosts };
 }
 
 function setCap(inf: WallInfo, end: 's' | 'e', v: boolean) {

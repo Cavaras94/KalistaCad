@@ -81,6 +81,82 @@ export function confirmBox(title: string, text: string, ok = 'Continua'): Promis
   });
 }
 
+/** Caselle da spuntare; restituisce lo stato di ciascuna, o null se la finestra viene chiusa senza OK. */
+export function chooseDialog(title: string, items: { key: string; label: string; on: boolean }[]): Promise<Record<string, boolean> | null> {
+  return new Promise(resolve => {
+    let done = false;
+    const body = el('div', { class: 'checks column' });
+    const boxes = items.map(it => {
+      const c = el('input', { type: 'checkbox' });
+      c.checked = it.on;
+      body.append(el('label', {}, c, ` ${it.label}`));
+      return [it.key, c] as const;
+    });
+    modal(title, body, [
+      { label: 'Annulla', onClick: () => { done = true; resolve(null); } },
+      { label: 'OK', primary: true, onClick: () => { done = true; resolve(Object.fromEntries(boxes.map(([k, c]) => [k, c.checked]))); } },
+    ]);
+    const root = document.getElementById('dialog-root')!;
+    const obs = new MutationObserver(() => { if (!root.querySelector('.modal')) { obs.disconnect(); if (!done) resolve(null); } });
+    obs.observe(root, { childList: true });
+  });
+}
+
+/** Legge un file di immagine e lo riduce a una dimensione ragionevole per stare dentro il disegno. */
+export function readImageFile(file: File, maxSide = 1600): Promise<{ src: string; w: number; h: number } | null> {
+  return new Promise(resolve => {
+    const rd = new FileReader();
+    rd.onerror = () => resolve(null);
+    rd.onload = () => {
+      const im = new Image();
+      im.onerror = () => resolve(null);
+      im.onload = () => {
+        const k = Math.min(1, maxSide / Math.max(im.naturalWidth, im.naturalHeight));
+        const w = Math.max(1, Math.round(im.naturalWidth * k)), h = Math.max(1, Math.round(im.naturalHeight * k));
+        const png = file.type === 'image/png' || file.type === 'image/gif' || file.type === 'image/svg+xml';
+        if (k === 1 && !png && String(rd.result).length < 1_500_000) { resolve({ src: String(rd.result), w, h }); return; }
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const g = c.getContext('2d');
+        if (!g) { resolve(null); return; }
+        if (!png) { g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); }
+        g.drawImage(im, 0, 0, w, h);
+        // Un PNG pesante (una foto, una scansione) passa a JPEG su fondo bianco: l'immagine sta dentro
+        // il disegno, e con più di qualche megabyte il salvataggio automatico non ce la farebbe.
+        let src = png ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.85);
+        if (png && src.length > 1_000_000) {
+          const d = document.createElement('canvas');
+          d.width = w; d.height = h;
+          const gd = d.getContext('2d')!;
+          gd.fillStyle = '#fff'; gd.fillRect(0, 0, w, h);
+          gd.drawImage(c, 0, 0);
+          src = d.toDataURL('image/jpeg', 0.85);
+        }
+        resolve({ src, w, h });
+      };
+      im.src = String(rd.result);
+    };
+    rd.readAsDataURL(file);
+  });
+}
+
+/** Apre la scelta di un file di immagine. null se si rinuncia. */
+export function pickImageFile(maxSide = 1600): Promise<{ src: string; w: number; h: number } | null> {
+  return new Promise(resolve => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/jpeg,image/png,image/gif,image/webp,image/bmp,image/svg+xml';
+    inp.className = 'image-input';
+    inp.hidden = true;
+    let settled = false;
+    const finish = (r: { src: string; w: number; h: number } | null) => { if (!settled) { settled = true; inp.remove(); resolve(r); } };
+    inp.onchange = () => { const f = inp.files?.[0]; if (f) void readImageFile(f, maxSide).then(finish); else finish(null); };
+    inp.addEventListener('cancel', () => finish(null));
+    document.body.append(inp);
+    inp.click();
+  });
+}
+
 // ---------------------------------------------------------------- impostazioni
 
 /**
@@ -140,6 +216,11 @@ export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Setting
   num('Altezza testo', 'textH');
   num('Altezza testo quote', 'dimH');
   num('Decimali quote', 'dimDec');
+  const arrows = el('select');
+  arrows.append(el('option', { value: 'false' }, 'Tratti obliqui'), el('option', { value: 'true' }, 'Frecce'));
+  arrows.value = String(!!s.dimArrow);
+  arrows.onchange = () => { s.dimArrow = arrows.value === 'true'; };
+  body.append(el('label', { class: 'field' }, el('span', {}, 'Stile delle quote'), arrows));
   num('Spessore muro', 'wallTh');
   num('Larghezza porta', 'doorW');
   num('Larghezza finestra', 'windowW');
@@ -212,7 +293,7 @@ export function helpDialog() {
 
 const PRINT_KEY = 'planimetrie.stampa';
 
-interface SavedPrint { paper: Paper; landscape: boolean; scale: number; mono: boolean; lineweights: boolean; wallFill: WallFill; title: boolean; fields: TitleFields }
+interface SavedPrint { paper: Paper; landscape: boolean; scale: number; mono: boolean; lineweights: boolean; wallFill: WallFill; title: boolean; fields: TitleFields; logo?: string }
 
 function loadPrint(): SavedPrint {
   const def: SavedPrint = {
@@ -267,6 +348,20 @@ export function printDialog(doc: Doc, areas: { ext: Box | null; view: Box; win: 
     tf.append(el('label', { class: 'field' }, el('span', {}, label), i));
   }
   form.append(tf);
+  // logo nel cartiglio
+  const logoBtn = el('button', { class: 'small' }, o.logo ? 'Cambia logo…' : 'Aggiungi logo (JPG, PNG)…');
+  const logoOff = el('button', { class: 'small' }, 'Togli logo');
+  logoOff.style.display = o.logo ? '' : 'none';
+  logoBtn.onclick = async () => {
+    const im = await pickImageFile(400);
+    if (!im) return;
+    o.logo = im.src;
+    logoBtn.textContent = 'Cambia logo…';
+    logoOff.style.display = '';
+    update();
+  };
+  logoOff.onclick = () => { delete o.logo; logoBtn.textContent = 'Aggiungi logo (JPG, PNG)…'; logoOff.style.display = 'none'; update(); };
+  form.append(el('div', { class: 'field' }, el('span', {}, 'Logo nel cartiglio'), el('span', { class: 'inline' }, logoBtn, logoOff)));
   body.append(form, el('div', { class: 'print-right' }, preview, info));
 
   let current = '';
@@ -286,7 +381,10 @@ export function printDialog(doc: Doc, areas: { ext: Box | null; view: Box; win: 
       ? `Scala 1:${sh.scale} — il disegno entra nel foglio ${o.paper}.`
       : `Attenzione: alla scala 1:${sh.scale} il disegno esce dal foglio e verrà tagliato.`;
     info.className = 'print-info' + (sh.fits ? '' : ' warn');
-    try { localStorage.setItem(PRINT_KEY, JSON.stringify(o)); } catch { /* preferenze non salvate */ }
+    try { localStorage.setItem(PRINT_KEY, JSON.stringify(o)); } catch {
+      // spazio finito (il logo pesa): almeno i campi del cartiglio restano ricordati
+      try { localStorage.setItem(PRINT_KEY, JSON.stringify({ ...o, logo: undefined })); } catch { /* preferenze non salvate */ }
+    }
     lastSize = [sh.w, sh.h];
   }
   let lastSize: [number, number] = [0, 0];

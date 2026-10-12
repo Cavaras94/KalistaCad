@@ -5,13 +5,19 @@ import {
   emptyBox, boxAdd, apply, applyDir, det, matScale, mapAngle, lineLine, compose, translate, rotateAbout, scaleAbout,
 } from './geom';
 import type { WallCtx } from './walls';
+import type { LineType } from './document';
 import { wallPrims } from './walls';
 
 export type HAlign = 'l' | 'c' | 'r';
 export type VAlign = 'b' | 'm' | 't';
-export type HatchPattern = 'solid' | 'ansi31' | 'ansi37';
+export type HatchPattern = 'solid' | 'ansi31' | 'ansi37' | 'lines' | 'grid' | 'brick' | 'dash' | 'dots';
+export const HATCH_NAMES: Record<HatchPattern, string> = {
+  solid: 'Pieno', ansi31: 'Linee a 45°', ansi37: 'Incrociato a 45°', lines: 'Linee', grid: 'Quadretti (piastrelle)',
+  brick: 'Mattoni', dash: 'Linee tratteggiate', dots: 'Puntinato',
+};
 
-interface Base { id: number; layer: string; color?: string; g?: number }
+/** lt e lw: tipo di linea e spessore di stampa propri dell'entità; assenti = quelli del layer. */
+interface Base { id: number; layer: string; color?: string; g?: number; lt?: LineType; lw?: number }
 export interface LineE extends Base { t: 'line'; a: Vec; b: Vec }
 export interface PolyE extends Base { t: 'poly'; pts: Vec[]; bulges?: number[]; closed: boolean }
 export interface CircleE extends Base { t: 'circle'; c: Vec; r: number }
@@ -31,8 +37,17 @@ export interface DoorE extends Base { t: 'door'; p: Vec; ang: number; w: number;
 export interface WindowE extends Base { t: 'window'; p: Vec; ang: number; w: number; th: number }
 export interface RoomE extends Base { t: 'room'; pts: Vec[]; name: string }
 export interface HatchE extends Base { t: 'hatch'; loops: Vec[][]; pat: HatchPattern; sp: number; ang: number }
-/** Ellisse intera: a = un semiasse (vettore dal centro), k = rapporto fra l'altro semiasse e questo. */
-export interface EllipseE extends Base { t: 'ellipse'; c: Vec; a: Vec; k: number }
+/**
+ * Ellisse: a = un semiasse (vettore dal centro), k = rapporto fra l'altro semiasse e questo.
+ * Con a0 e a1 è un arco di ellisse, in senso antiorario da a0 ad a1 (angoli del parametro, non al centro).
+ */
+export interface EllipseE extends Base { t: 'ellipse'; c: Vec; a: Vec; k: number; a0?: number; a1?: number }
+/** Immagine (JPG, PNG): p = angolo in basso a sinistra, w e h nelle unità del disegno, src = i dati dell'immagine. */
+export interface ImageE extends Base { t: 'image'; p: Vec; w: number; h: number; rot: number; src: string }
+/** Punto: un segno a crocetta, utile come riferimento per gli snap (DIVIDI e MISURA ne mettono). */
+export interface PointE extends Base { t: 'point'; p: Vec }
+/** Direttrice: spezzata con la freccia sul primo punto e un testo in fondo. h assente = altezza delle quote. */
+export interface LeaderE extends Base { t: 'leader'; pts: Vec[]; s: string; h?: number }
 /** Curva morbida passante per i punti pts. */
 export interface SplineE extends Base { t: 'spline'; pts: Vec[]; closed: boolean }
 /**
@@ -45,7 +60,7 @@ export interface InsertE extends Base { t: 'insert'; name: string; p: Vec; s: nu
 export interface BlockDef { ents: Ent[] }
 export type Blocks = Record<string, BlockDef>;
 
-export type Ent = LineE | PolyE | CircleE | ArcE | TextE | DimE | WallE | DoorE | WindowE | RoomE | HatchE | EllipseE | SplineE | InsertE;
+export type Ent = LineE | PolyE | CircleE | ArcE | TextE | DimE | WallE | DoorE | WindowE | RoomE | HatchE | EllipseE | SplineE | InsertE | PointE | LeaderE | ImageE;
 export type EntType = Ent['t'];
 /** Entità ancora senza id (create da un comando, prima di entrare nel documento). */
 export type NewEnt = Ent extends infer E ? (E extends Ent ? Omit<E, 'id'> & { id?: number } : never) : never;
@@ -53,7 +68,7 @@ export type NewEnt = Ent extends infer E ? (E extends Ent ? Omit<E, 'id'> & { id
 export const TYPE_NAMES: Record<EntType, string> = {
   line: 'Linea', poly: 'Polilinea', circle: 'Cerchio', arc: 'Arco', text: 'Testo', dim: 'Quota',
   wall: 'Muro', door: 'Porta', window: 'Finestra', room: 'Locale', hatch: 'Tratteggio',
-  ellipse: 'Ellisse', spline: 'Spline', insert: 'Blocco',
+  ellipse: 'Ellisse', spline: 'Spline', insert: 'Blocco', point: 'Punto', leader: 'Direttrice', image: 'Immagine',
 };
 
 // ---------------------------------------------------------------- primitive
@@ -63,7 +78,8 @@ export type Prim =
   | { k: 'pl'; pts: Vec[]; closed?: boolean; fill?: Fill; stroke?: boolean }
   | { k: 'arc'; c: Vec; r: number; a0: number; a1: number; full?: boolean }
   | { k: 'text'; p: Vec; s: string; h: number; rot: number; ha: HAlign; va: VAlign }
-  | { k: 'area'; loops: Vec[][]; fill: Fill };
+  | { k: 'area'; loops: Vec[][]; fill: Fill }
+  | { k: 'img'; p: Vec; w: number; h: number; rot: number; src: string };
 
 export interface PrimCtx {
   dimH: number;
@@ -73,6 +89,8 @@ export interface PrimCtx {
   walls?: WallCtx;
   /** definizioni dei blocchi, per disegnare gli inserimenti */
   blocks?: Blocks;
+  /** quote lineari con le frecce invece dei tratti obliqui */
+  dimArrow?: boolean;
 }
 
 export const DEFAULT_CTX: PrimCtx = { dimH: 15, dimDec: 0, areaDiv: 10000 };
@@ -241,14 +259,32 @@ function dimPrims(e: DimE, ctx: PrimCtx): Prim[] {
     }
   }
   const ta = dot(sub(g.a2, e.p), g.u), tb = dot(sub(g.b2, e.p), g.u);
-  const lo = add(e.p, mul(g.u, Math.min(ta, tb) - ext));
-  const hi = add(e.p, mul(g.u, Math.max(ta, tb) + ext));
-  out.push({ k: 'pl', pts: [lo, hi] });
-  const tick = mul(dirOf(Math.atan2(g.u.y, g.u.x) + Math.PI / 4), H * 0.45);
-  for (const q of [g.a2, g.b2]) out.push({ k: 'pl', pts: [sub(q, tick), add(q, tick)] });
+  if (ctx.dimArrow && dist(g.a2, g.b2) > 1e-9) {
+    // stile a frecce: la linea di quota finisce sulle linee di estensione, con le punte rivolte verso l'esterno
+    const w = norm(sub(g.a2, g.b2));
+    if (dist(g.a2, g.b2) < H * 2.4) {
+      // quota corta: le frecce non ci stanno dentro, si mettono fuori con le punte rivolte all'interno
+      out.push({ k: 'pl', pts: [add(g.a2, mul(w, H * 1.6)), sub(g.b2, mul(w, H * 1.6))] });
+      out.push(arrowPrim(g.a2, mul(w, -1), H), arrowPrim(g.b2, w, H));
+    } else {
+      out.push({ k: 'pl', pts: [g.a2, g.b2] });
+      out.push(arrowPrim(g.a2, w, H), arrowPrim(g.b2, mul(w, -1), H));
+    }
+  } else {
+    const lo = add(e.p, mul(g.u, Math.min(ta, tb) - ext));
+    const hi = add(e.p, mul(g.u, Math.max(ta, tb) + ext));
+    out.push({ k: 'pl', pts: [lo, hi] });
+    const tick = mul(dirOf(Math.atan2(g.u.y, g.u.x) + Math.PI / 4), H * 0.45);
+    for (const q of [g.a2, g.b2]) out.push({ k: 'pl', pts: [sub(q, tick), add(q, tick)] });
+  }
   const rot = readableAngle(Math.atan2(g.u.y, g.u.x));
   const up = perp(dirOf(rot));
-  out.push({ k: 'text', p: add(mid(g.a2, g.b2), mul(up, H * 0.3)), s: e.s ?? fmtNum(g.value, ctx.dimDec), h: H, rot, ha: 'c', va: 'b' });
+  const s = e.s ?? fmtNum(g.value, ctx.dimDec);
+  // se fra le linee di estensione il testo non ci sta, va di fianco, oltre la seconda
+  const tw = s.length * H * CHAR_W, span = dist(g.a2, g.b2);
+  const along = span > 1e-9 ? norm(sub(g.b2, g.a2)) : g.u;
+  const at = tw > span - H * 0.3 ? add(g.b2, mul(along, tw / 2 + H * 0.9)) : mid(g.a2, g.b2);
+  out.push({ k: 'text', p: add(at, mul(up, H * 0.3)), s, h: H, rot, ha: 'c', va: 'b' });
   return out;
 }
 
@@ -303,15 +339,32 @@ function roomPrims(e: RoomE, ctx: PrimCtx): Prim[] {
 
 const MAX_HATCH_LINES = 4000;
 
+/**
+ * Una famiglia di righe parallele di un retino: ang = inclinazione; dash = [tratto, vuoto] in multipli
+ * del passo (assente = riga continua); stagger = di quanto è sfalsato il tratteggio fra una riga e la
+ * successiva, sempre in multipli del passo.
+ */
+const MAX_HATCH_DASHES = 60000;
+interface HatchFam { ang: number; dash?: [number, number]; stagger?: number }
+const HATCH_FAMS: Record<Exclude<HatchPattern, 'solid'>, HatchFam[]> = {
+  ansi31: [{ ang: Math.PI / 4 }],
+  ansi37: [{ ang: Math.PI / 4 }, { ang: -Math.PI / 4 }],
+  lines: [{ ang: 0 }],
+  grid: [{ ang: 0 }, { ang: Math.PI / 2 }],
+  // corsi orizzontali, e giunti verticali alterni: mattoni lunghi due passi e alti uno
+  brick: [{ ang: 0 }, { ang: Math.PI / 2, dash: [1, 1], stagger: 1 }],
+  dash: [{ ang: Math.PI / 4, dash: [1.5, 0.75] }],
+  dots: [{ ang: 0, dash: [0.12, 0.88], stagger: 0.5 }],
+};
+
 function hatchPrims(e: HatchE): Prim[] {
   const loops = e.loops.filter(l => l.length >= 3);
   if (!loops.length) return [];
   if (e.pat === 'solid') return [{ k: 'area', loops, fill: 'solid' }];
   const out: Prim[] = [];
-  const angles = e.pat === 'ansi37' ? [e.ang + Math.PI / 4, e.ang - Math.PI / 4] : [e.ang + Math.PI / 4];
   const pts = loops.flat();
-  for (const a of angles) {
-    const d = dirOf(a), n = perp(d);
+  for (const fam of HATCH_FAMS[e.pat] ?? HATCH_FAMS.ansi31) {
+    const d = dirOf(e.ang + fam.ang), n = perp(d);
     let lo = Infinity, hi = -Infinity;
     for (const p of pts) {
       const s = dot(p, n);
@@ -320,19 +373,75 @@ function hatchPrims(e: HatchE): Prim[] {
     }
     let sp = Math.max(e.sp, 1e-9);
     if ((hi - lo) / sp > MAX_HATCH_LINES) sp = (hi - lo) / MAX_HATCH_LINES;
-    for (let s = Math.ceil(lo / sp) * sp; s <= hi; s += sp) {
-      for (const [p, q] of clipLineToLoops(mul(n, s), d, loops)) out.push({ k: 'pl', pts: [p, q] });
+    // un retino a tratti troppo fitto per l'area (centinaia di migliaia di trattini) si disegna a righe continue
+    let dashed = !!fam.dash;
+    if (fam.dash) {
+      let tlo = Infinity, thi = -Infinity;
+      for (const p of pts) { const t = dot(p, d); if (t < tlo) tlo = t; if (t > thi) thi = t; }
+      if (((hi - lo) / sp) * ((thi - tlo) / ((fam.dash[0] + fam.dash[1]) * sp)) > MAX_HATCH_DASHES) dashed = false;
+    }
+    for (let i = Math.ceil(lo / sp); i * sp <= hi; i++) {
+      const o = mul(n, i * sp);
+      for (const [p, q] of clipLineToLoops(o, d, loops)) {
+        if (!fam.dash || !dashed) { out.push({ k: 'pl', pts: [p, q] }); continue; }
+        // riga tratteggiata: i tratti sono ancorati all'origine del disegno, sfalsati di riga in riga
+        const on = fam.dash[0] * sp, period = (fam.dash[0] + fam.dash[1]) * sp;
+        const shift = (((i % 2) + 2) % 2) * (fam.stagger ?? 0) * sp;
+        const t0 = dot(p, d), t1 = dot(q, d);
+        if ((t1 - t0) / period > MAX_HATCH_LINES) { out.push({ k: 'pl', pts: [p, q] }); continue; }
+        for (let k = Math.floor((t0 - shift) / period); shift + k * period < t1; k++) {
+          const a = Math.max(t0, shift + k * period), b = Math.min(t1, shift + k * period + on);
+          if (b - a > 1e-9) out.push({ k: 'pl', pts: [add(o, mul(d, a)), add(o, mul(d, b))] });
+        }
+      }
     }
   }
   return out;
 }
 
-export function ellipsePoints(e: { c: Vec; a: Vec; k: number }, n = 96): Vec[] {
-  const b = mul(perp(e.a), e.k);
+/** Angoli di un'immagine, dal punto di inserimento in senso antiorario. */
+export function imageCorners(e: { p: Vec; w: number; h: number; rot: number }): Vec[] {
+  const u = dirOf(e.rot), n = perp(u);
+  return [e.p, add(e.p, mul(u, e.w)), add(add(e.p, mul(u, e.w)), mul(n, e.h)), add(e.p, mul(n, e.h))];
+}
+
+/** Vero se l'ellisse è solo un arco. */
+export const isEllipseArc = (e: { a0?: number; a1?: number }): boolean => e.a0 !== undefined && e.a1 !== undefined;
+
+/** Punto dell'ellisse al parametro t. */
+export function ellipseAt(e: { c: Vec; a: Vec; k: number }, t: number): Vec {
+  return add(e.c, add(mul(e.a, Math.cos(t)), mul(perp(e.a), e.k * Math.sin(t))));
+}
+
+/** Punti dell'ellisse: n lungo il giro intero (senza ripetere il primo); per un arco, estremi compresi. */
+export function ellipsePoints(e: { c: Vec; a: Vec; k: number; a0?: number; a1?: number }, n = 96): Vec[] {
   const out: Vec[] = [];
-  for (let i = 0; i < n; i++) {
-    const t = (TAU * i) / n;
-    out.push(add(e.c, add(mul(e.a, Math.cos(t)), mul(b, Math.sin(t)))));
+  if (e.a0 !== undefined && e.a1 !== undefined) {
+    const sw = sweep(e.a0, e.a1);
+    const m = Math.max(2, Math.ceil((n * sw) / TAU));
+    for (let i = 0; i <= m; i++) out.push(ellipseAt(e, e.a0 + (sw * i) / m));
+    return out;
+  }
+  for (let i = 0; i < n; i++) out.push(ellipseAt(e, (TAU * i) / n));
+  return out;
+}
+
+/** Vero se fra le entità c'è, anche annidato, un inserimento del blocco name. */
+export function blockUses(ents: readonly Ent[], name: string, blocks: Blocks, depth = 0): boolean {
+  return ents.some(e => e.t === 'insert' && (e.name === name || (depth < 8 && blockUses(blocks[e.name]?.ents ?? [], name, blocks, depth + 1))));
+}
+
+function leaderPrims(e: LeaderE, ctx: PrimCtx): Prim[] {
+  if (e.pts.length < 2) return [];
+  const H = e.h ?? ctx.dimH;
+  const out: Prim[] = [{ k: 'pl', pts: e.pts }];
+  const d0 = sub(e.pts[0], e.pts[1]);
+  if (len(d0) > 1e-9) out.push(arrowPrim(e.pts[0], norm(d0), H));
+  if (e.s) {
+    // il testo sta oltre l'ultimo punto, dalla parte verso cui va l'ultimo tratto
+    const n = e.pts.length;
+    const right = e.pts[n - 1].x >= e.pts[n - 2].x;
+    out.push({ k: 'text', p: add(e.pts[n - 1], v(right ? H * 0.4 : -H * 0.4, 0)), s: e.s, h: H, rot: 0, ha: right ? 'l' : 'r', va: 'm' });
   }
   return out;
 }
@@ -425,7 +534,14 @@ export function prims(e: Ent, ctx: PrimCtx = DEFAULT_CTX): Prim[] {
     case 'window': return windowPrims(e, ctx);
     case 'room': return roomPrims(e, ctx);
     case 'hatch': return hatchPrims(e);
-    case 'ellipse': return [{ k: 'pl', pts: ellipsePoints(e), closed: true }];
+    case 'ellipse': return [{ k: 'pl', pts: ellipsePoints(e), closed: !isEllipseArc(e) }];
+    case 'point': {
+      const h = ctx.dimH * 0.35;
+      return [{ k: 'pl', pts: [v(e.p.x - h, e.p.y), v(e.p.x + h, e.p.y)] }, { k: 'pl', pts: [v(e.p.x, e.p.y - h), v(e.p.x, e.p.y + h)] }];
+    }
+    case 'leader': return leaderPrims(e, ctx);
+    // il contorno non si disegna: serve per selezionare l'immagine e per il suo ingombro
+    case 'image': return [{ k: 'img', p: e.p, w: e.w, h: e.h, rot: e.rot, src: e.src }, { k: 'pl', pts: imageCorners(e), closed: true, stroke: false }];
     case 'spline': return [{ k: 'pl', pts: splinePoints(e.pts, e.closed), closed: e.closed }];
     case 'insert': return insertPrims(e, ctx);
   }
@@ -439,6 +555,7 @@ export function primCurves(ps: Prim[]): Curve[] {
       for (let i = 0; i + 1 < p.pts.length; i++) out.push(seg(p.pts[i], p.pts[i + 1]));
       if (p.closed && p.pts.length > 2) out.push(seg(p.pts[p.pts.length - 1], p.pts[0]));
     } else if (p.k === 'arc') out.push(arcC(p.c, p.r, p.a0, p.a1, p.full));
+    else if (p.k === 'img') continue;
     else if (p.k === 'area') {
       for (const l of p.loops) for (let i = 0; i < l.length; i++) out.push(seg(l[i], l[(i + 1) % l.length]));
     } else {
@@ -467,6 +584,7 @@ export function primsBox(ps: Prim[], e?: Ent): Box {
     if (p.k === 'pl') p.pts.forEach(q => boxAdd(b, q));
     else if (p.k === 'area') p.loops.forEach(l => l.forEach(q => boxAdd(b, q)));
     else if (p.k === 'text') textCorners(p).forEach(q => boxAdd(b, q));
+    else if (p.k === 'img') imageCorners(p).forEach(q => boxAdd(b, q));
     else if (p.full) { boxAdd(b, v(p.c.x - p.r, p.c.y - p.r)); boxAdd(b, v(p.c.x + p.r, p.c.y + p.r)); }
     else {
       boxAdd(b, polar(p.c, p.r, p.a0));
@@ -533,9 +651,13 @@ export function snapPoints(e: Ent, ctx: PrimCtx = DEFAULT_CTX): SnapPt[] {
     case 'ellipse': {
       const b = mul(perp(e.a), e.k);
       P(e.c, 'cen');
-      for (const q of [add(e.c, e.a), sub(e.c, e.a), add(e.c, b), sub(e.c, b)]) P(q, 'quad');
+      if (isEllipseArc(e)) { P(ellipseAt(e, e.a0!), 'end'); P(ellipseAt(e, e.a1!), 'end'); }
+      else for (const q of [add(e.c, e.a), sub(e.c, e.a), add(e.c, b), sub(e.c, b)]) P(q, 'quad');
       break;
     }
+    case 'point': P(e.p, 'end'); break;
+    case 'image': imageCorners(e).forEach(q => P(q, 'end')); break;
+    case 'leader': e.pts.forEach(p => P(p, 'end')); break;
     case 'spline': e.pts.forEach(p => P(p, 'end')); break;
     case 'insert':
       P(e.p, 'ins');
@@ -560,8 +682,9 @@ export function grips(e: Ent): Vec[] {
     case 'room': return e.pts;
     case 'hatch': return e.loops.flat();
     case 'ellipse': { const b = mul(perp(e.a), e.k); return [e.c, add(e.c, e.a), sub(e.c, e.a), add(e.c, b), sub(e.c, b)]; }
-    case 'spline': return e.pts;
-    case 'insert': return [e.p];
+    case 'spline': case 'leader': return e.pts;
+    case 'insert': case 'point': return [e.p];
+    case 'image': return [e.p, imageCorners(e)[2]];
   }
 }
 
@@ -585,7 +708,7 @@ export function moveGrip(e: Ent, i: number, p: Vec): Ent {
       return { ...e, a: add(e.a, d), b: add(e.b, d) };
     case 'poly': return { ...e, pts: e.pts.map((q, j) => (j === i ? p : q)) };
     case 'room': return { ...e, pts: e.pts.map((q, j) => (j === i ? p : q)) };
-    case 'spline': return { ...e, pts: e.pts.map((q, j) => (j === i ? p : q)) };
+    case 'spline': case 'leader': return { ...e, pts: e.pts.map((q, j) => (j === i ? p : q)) };
     case 'ellipse': {
       if (i === 0) return { ...e, c: p };
       const r = dist(e.c, p);
@@ -603,7 +726,13 @@ export function moveGrip(e: Ent, i: number, p: Vec): Ent {
       const a = arc3(pts[0], pts[1], pts[2]);
       return a ? { ...e, ...a } : e;
     }
-    case 'text': case 'door': case 'window': case 'insert': return { ...e, p };
+    case 'text': case 'door': case 'window': case 'insert': case 'point': return { ...e, p };
+    case 'image': {
+      if (i === 0) return { ...e, p };
+      // il grip sull'angolo opposto ingrandisce o rimpicciolisce l'immagine senza deformarla
+      const k = dist(e.p, p) / Math.hypot(e.w, e.h);
+      return k > 1e-9 ? { ...e, w: e.w * k, h: e.h * k } : e;
+    }
     case 'dim': return i === 0 ? { ...e, a: p } : i === 1 ? { ...e, b: p } : i === 3 ? { ...e, c: p } : { ...e, p };
     case 'hatch': {
       let k = i;
@@ -649,7 +778,23 @@ export function transform<E extends Ent>(e: E, m: Mat): E {
     case 'window': r = { ...x, p: P(x.p), ang: mapAngle(m, x.ang), w: x.w * s, th: x.th * s }; break;
     case 'room': r = { ...x, pts: x.pts.map(P) }; break;
     case 'hatch': r = { ...x, loops: x.loops.map(l => l.map(P)), sp: x.sp * s, ang: mapAngle(m, x.ang) }; break;
-    case 'ellipse': r = { ...x, c: P(x.c), a: applyDir(m, x.a) }; break;
+    case 'ellipse':
+      r = { ...x, c: P(x.c), a: applyDir(m, x.a) };
+      // allo specchio il verso di percorrenza si inverte: l'arco va dal vecchio estremo finale all'iniziale
+      if (mirror && x.a0 !== undefined && x.a1 !== undefined) { r.a0 = -x.a1; r.a1 = -x.a0; }
+      break;
+    case 'point': r = { ...x, p: P(x.p) }; break;
+    case 'image':
+      // Allo specchio l'immagine resta dritta (non si può rovesciare), ma va a occupare il posto
+      // del rettangolo specchiato: riparte dall'altro angolo di base, in direzione opposta.
+      r = mirror
+        ? { ...x, p: P(add(x.p, mul(dirOf(x.rot), x.w))), w: x.w * s, h: x.h * s, rot: mapAngle(m, x.rot) + Math.PI }
+        : { ...x, p: P(x.p), w: x.w * s, h: x.h * s, rot: mapAngle(m, x.rot) };
+      break;
+    case 'leader':
+      r = { ...x, pts: x.pts.map(P) };
+      if (x.h !== undefined) r.h = x.h * s;
+      break;
     case 'spline': r = { ...x, pts: x.pts.map(P) }; break;
     case 'insert': {
       // uno specchio rovescia il blocco: l'asse X del blocco specchiato punta dalla parte opposta
@@ -669,7 +814,7 @@ export function stretch(e: Ent, inside: (p: Vec) => boolean, d: Vec): Ent | null
     case 'line': case 'wall': return any([e.a, e.b]) ? { ...e, a: mv(e.a), b: mv(e.b) } : null;
     case 'poly': return any(e.pts) ? { ...e, pts: e.pts.map(mv) } : null;
     case 'room': return any(e.pts) ? { ...e, pts: e.pts.map(mv) } : null;
-    case 'spline': return any(e.pts) ? { ...e, pts: e.pts.map(mv) } : null;
+    case 'spline': case 'leader': return any(e.pts) ? { ...e, pts: e.pts.map(mv) } : null;
     case 'ellipse': return inside(e.c) ? { ...e, c: add(e.c, d) } : null;
     case 'hatch': return any(e.loops.flat()) ? { ...e, loops: e.loops.map(l => l.map(mv)) } : null;
     case 'dim': return any([e.a, e.b, e.p, ...(e.c ? [e.c] : [])])
@@ -677,14 +822,14 @@ export function stretch(e: Ent, inside: (p: Vec) => boolean, d: Vec): Ent | null
       : null;
     case 'circle': return inside(e.c) ? { ...e, c: add(e.c, d) } : null;
     case 'arc': return inside(e.c) ? { ...e, c: add(e.c, d) } : null;
-    case 'text': case 'door': case 'window': case 'insert': return inside(e.p) ? { ...e, p: add(e.p, d) } : null;
+    case 'text': case 'door': case 'window': case 'insert': case 'point': case 'image': return inside(e.p) ? { ...e, p: add(e.p, d) } : null;
   }
 }
 
 /** Esplosione in entità semplici. null = non esplodibile. */
 export function explode(e: Ent, ctx: PrimCtx = DEFAULT_CTX): NewEnt[] | null {
   const base = { layer: e.layer, color: e.color };
-  if (e.t === 'line' || e.t === 'circle' || e.t === 'arc') return null;
+  if (e.t === 'line' || e.t === 'circle' || e.t === 'arc' || e.t === 'point' || e.t === 'image') return null;
   if (e.t === 'text') {
     if (!e.s.includes('\n')) return null;
     const co = Math.cos(e.rot), si = Math.sin(e.rot);
@@ -708,6 +853,7 @@ export function explode(e: Ent, ctx: PrimCtx = DEFAULT_CTX): NewEnt[] | null {
     } else if (p.k === 'arc') {
       out.push(p.full ? { ...base, t: 'circle', c: p.c, r: p.r } : { ...base, t: 'arc', c: p.c, r: p.r, a0: p.a0, a1: p.a1 });
     } else if (p.k === 'text') out.push({ ...base, t: 'text', p: p.p, s: p.s, h: p.h, rot: p.rot, ha: p.ha, va: p.va });
+    else if (p.k === 'img') continue;
     else for (const l of p.loops) out.push({ ...base, t: 'poly', pts: l, closed: true });
   }
   return out;

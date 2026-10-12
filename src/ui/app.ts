@@ -1,20 +1,22 @@
 // Applicazione: vista, input, riga di comando, file.
 import type { Ent, NewEnt, PrimCtx, SnapKind } from '../model/entities';
-import { prims, grips, entBox } from '../model/entities';
+import { prims, grips, entBox, flatEnts } from '../model/entities';
 import { Doc, DocData, UNIT_LABEL } from '../model/document';
 import { buildWallCtx } from '../model/walls';
 import { Vec, Box, v, dist, boxOf, sub, angleOf, len, emptyBox, boxUnion, boxValid, same } from '../model/geom';
 import { View } from '../view/view';
-import { renderDoc, paint, entPrims, layerDash } from '../view/render';
+import { renderDoc, paint, entPrims, layerDash, whenImagesLoad } from '../view/render';
 import { findSnap, pickAt, pickBox, SnapResult, SnapSettings, SNAP_LABEL } from '../view/snap';
 import type { Host, Tool } from '../tools/base';
 import { parsePoint, fmtLen } from '../tools/base';
 import { GripTool } from '../tools/misc';
+import { purgeBlocks } from '../tools/blocks';
+import { layerAction } from '../tools/extra';
 import { findCommand, suggest, COMMANDS } from './commands';
 import { icon } from './icons';
 import { logo, VERSION, VERSION_LONG } from './logo';
 import { Panels } from './panels';
-import { settingsDialog, helpDialog, printDialog, confirmBox, askText, importUnitsDialog } from './dialogs';
+import { settingsDialog, helpDialog, printDialog, confirmBox, askText, importUnitsDialog, chooseDialog, pickImageFile } from './dialogs';
 import { exportDxf } from '../io/dxf-export';
 import { importDxf, importDwg } from '../io/files';
 import type { ImportResult } from '../io/importer';
@@ -43,7 +45,15 @@ export class App implements Host {
 
   private tool: Tool | null = null;
   private lastCmd: string | null = null;
-  private snapSt: SnapSettings = { osnap: true, modes: new Set<SnapKind>(['end', 'mid', 'cen', 'int', 'perp', 'quad', 'ins']), gridSnap: false, ortho: false, polar: true, polarInc: 45 };
+  private snapSt: SnapSettings = { osnap: true, modes: new Set<SnapKind>(['end', 'mid', 'cen', 'int', 'perp', 'quad', 'ins']), gridSnap: false, ortho: false, polar: true, polarInc: 45, otrack: true };
+  /** snap digitato (FIN, MED…), valido solo per il prossimo punto */
+  private snapOnce: SnapKind | 'none' | null = null;
+  /** ultimi punti agganciati con lo snap, per il puntamento */
+  private acquired: Vec[] = [];
+  /** comando messo in attesa da uno zoom o un pan fatto durante il comando */
+  private suspended: { tool: Tool; lastPoint: Vec | null } | null = null;
+  /** ultima selezione fatta per un comando, per l'opzione Precedente */
+  private prevSelection: number[] = [];
   private gridOn = true;
   private lwt = false;
   private snap: SnapResult | null = null;
@@ -83,6 +93,7 @@ export class App implements Host {
     this.buildStatus();
     this.bindEvents();
     this.doc.onChange(() => this.onDocChange());
+    whenImagesLoad(() => { this.baseDirty = true; this.schedule(); });
     const restored = this.restore();
     this.resize();
     new ResizeObserver(() => this.resize()).observe($('canvas-wrap'));
@@ -105,6 +116,18 @@ export class App implements Host {
   }
 
   done() {
+    this.snapOnce = null;
+    this.acquired = [];
+    const back = this.suspended;
+    if (back) {
+      // finito lo zoom o il pan: si riprende il comando che era in corso, dal punto in cui era
+      this.suspended = null;
+      this.tool = back.tool;
+      this.lastPoint = back.lastPoint;
+      this.snap = null;
+      this.refresh();
+      return;
+    }
     this.tool = null;
     this.snap = null;
     this.setIdlePrompt();
@@ -119,6 +142,9 @@ export class App implements Host {
   }
 
   tol() { return PICK_PX / this.view.s; }
+
+  choose(title: string, items: { key: string; label: string; on: boolean }[]) { return chooseDialog(title, items); }
+  pickImage() { return pickImageFile(); }
 
   pick(p: Vec, filter?: (e: Ent) => boolean): Ent | null {
     return pickAt(this.doc, p, this.tol(), e => this.doc.isEditable(e) && (!filter || filter(e)));
@@ -162,12 +188,27 @@ export class App implements Host {
     if (!def) { this.msg(`Comando sconosciuto: "${cmd}". Digitare ? per l'elenco dei comandi.`); return; }
     if (def.action) {
       // salvare o guardare layer e proprietà non deve far perdere il comando in corso
-      if (this.tool && !['zoomext', 'regen', 'help', 'save', 'saveas', 'dxfout', 'layer', 'properties'].includes(def.action)) this.cancelTool(true);
+      if (this.tool && !['zoomext', 'regen', 'help', 'save', 'saveas', 'dxfout', 'layer', 'properties', 'selectall'].includes(def.action)) { this.dropSuspended(); this.cancelTool(true); }
       this.action(def.action);
       if (!['undo', 'redo'].includes(def.action)) this.lastCmd = def.name;
       return;
     }
+    // zoom e pan dentro un comando non lo annullano: lo mettono in attesa e poi lo riprendono
+    if (this.tool && (def.name === 'ZOOM' || def.name === 'PAN')) {
+      // uno zoom dentro un pan (o viceversa) prende il suo posto: non si mettono in fila
+      const isView = this.tool.name === 'ZOOM' || this.tool.name === 'PAN';
+      if (!this.suspended && !isView) this.suspended = { tool: this.tool, lastPoint: this.lastPoint };
+      else this.tool.cancel();
+      this.boxStart = null;
+      this.boxMoved = false;
+      this.tool = def.make!(this);
+      this.tool.start();
+      this.refresh();
+      return;
+    }
+    this.dropSuspended();
     if (this.tool) this.cancelTool(true);
+    if (this.selection.size) this.prevSelection = [...this.selection];
     // un riquadro di selezione lasciato aperto non deve chiudersi sui clic del comando
     this.boxStart = null;
     this.boxMoved = false;
@@ -175,6 +216,21 @@ export class App implements Host {
     this.tool = def.make!(this);
     this.tool.start();
     this.refresh();
+  }
+
+  /** Cambiato disegno: via ciò che il programma ricordava di quello di prima (i numeri delle entità ripartono). */
+  private forgetDrawing() {
+    this.printWin = null;
+    this.prevSelection = [];
+    this.lastPoint = null;
+    this.acquired = [];
+  }
+
+  /** Annulla anche il comando che uno zoom o un pan aveva messo in attesa. */
+  private dropSuspended() {
+    if (!this.suspended) return;
+    this.suspended.tool.cancel();
+    this.suspended = null;
   }
 
   // ================================================================ vista
@@ -232,7 +288,7 @@ export class App implements Host {
       g.save();
       for (const e of this.doc.ents) {
         if (!this.selection.has(e.id)) continue;
-        paint(g, this.view, entPrims(e, ctx).map(p => (p.k === 'pl' && p.fill ? { ...p, fill: undefined, stroke: true } : p.k === 'area' ? { k: 'pl' as const, pts: p.loops[0], closed: true } : p)), {
+        paint(g, this.view, entPrims(e, ctx).map(p => (p.k === 'pl' && (p.fill || p.stroke === false) ? { ...p, fill: undefined, stroke: true } : p.k === 'area' ? { k: 'pl' as const, pts: p.loops[0], closed: true } : p)), {
           color: ACCENT, lw: 1.6, dash: [6, 4], wallAlpha: 0, tint: false,
         });
       }
@@ -243,6 +299,7 @@ export class App implements Host {
   private renderGrid(g: CanvasRenderingContext2D) {
     let step = this.doc.settings.grid;
     if (step <= 0) return;
+    g.setLineDash([]);
     while (step * this.view.s < 12) step *= 5;
     const vb = this.view.visibleBox();
     g.save();
@@ -305,7 +362,7 @@ export class App implements Host {
 
     // entità sotto il cursore
     if (this.hover && (!t || t.mode === 'select' || t.mode === 'entity')) {
-      paint(g, this.view, entPrims(this.hover, this.doc.ctx()).map(q => (q.k === 'pl' && q.fill ? { ...q, fill: undefined, stroke: true } : q)), {
+      paint(g, this.view, entPrims(this.hover, this.doc.ctx()).map(q => (q.k === 'pl' && (q.fill || q.stroke === false) ? { ...q, fill: undefined, stroke: true } : q)), {
         color: '#9cc8ff', lw: 2.2, dash: [], wallAlpha: 0, tint: false,
       });
     }
@@ -369,6 +426,21 @@ export class App implements Host {
       g.strokeStyle = 'rgba(120,220,140,0.7)';
       g.setLineDash([2, 4]);
       g.beginPath(); g.moveTo(o.x, o.y); g.lineTo(o.x + Math.cos(ang) * L, o.y - Math.sin(ang) * L); g.stroke();
+      g.restore();
+    }
+
+    // puntamento snap ad oggetto: tratto dal punto acquisito al punto allineato
+    if (this.snap?.align && this.mouse) {
+      const q = this.view.toScreen(this.snap.p);
+      g.save();
+      g.strokeStyle = 'rgba(120,220,140,0.8)';
+      for (const a of this.snap.align) {
+        const o = this.view.toScreen(a);
+        g.setLineDash([2, 4]);
+        g.beginPath(); g.moveTo(o.x, o.y); g.lineTo(q.x, q.y); g.stroke();
+        g.setLineDash([]);
+        g.beginPath(); g.moveTo(o.x - 4, o.y); g.lineTo(o.x + 4, o.y); g.moveTo(o.x, o.y - 4); g.lineTo(o.x, o.y + 4); g.stroke();
+      }
       g.restore();
     }
 
@@ -452,7 +524,13 @@ export class App implements Host {
     this.cursor = world;
     const t = this.tool;
     if (t && t.mode === 'point') {
-      this.snap = findSnap(this.doc, world, SNAP_PX / this.view.s, this.snapSt, t.base ?? undefined, t.snapExclude);
+      this.snap = findSnap(this.doc, world, SNAP_PX / this.view.s, this.snapSt, t.base ?? undefined, t.snapExclude, { only: this.snapOnce ?? undefined, acquired: this.acquired });
+      // un punto agganciato resta "acquisito": muovendosi in orizzontale o in verticale da lì ci si allinea
+      const sk = this.snap.k;
+      if (this.snapSt.otrack && sk && sk !== 'grid' && sk !== 'near' && sk !== 'perp') {
+        const q = this.snap.p;
+        if (!this.acquired.some(a => same(a, q, 1e-9))) this.acquired = [q, ...this.acquired].slice(0, 2);
+      }
       this.hover = null;
     } else {
       this.snap = null;
@@ -487,7 +565,7 @@ export class App implements Host {
       this.updateCursor();
       this.schedule();
     });
-    c.addEventListener('mouseleave', () => { this.mouse = null; this.schedule(); });
+    c.addEventListener('mouseleave', () => { this.mouse = null; this.hover = null; this.schedule(); });
     c.addEventListener('mousedown', e => this.onMouseDown(e));
     window.addEventListener('mouseup', e => {
       if (this.panning && (e.button === 1 || e.button === 0)) { this.panning = null; c.style.cursor = ''; }
@@ -550,10 +628,16 @@ export class App implements Host {
       return;
     }
     if (t && (t as { panMode?: boolean }).panMode) { this.panning = s; return; }
-    if (t && t.mode === 'point') { this.feedPoint(this.snap?.p ?? world); return; }
+    if (t && t.mode === 'point') {
+      if (this.snap?.miss) { this.msg('Lì vicino non c\'è il punto di snap richiesto: avvicinarsi all\'entità (Esc per rinunciare).'); return; }
+      this.feedPoint(this.snap?.p ?? world);
+      return;
+    }
     if (t && t.mode === 'entity') {
       const hit = this.pick(world);
-      if (hit) { t.entity(hit, world); this.refresh(); } else this.msg('Nessuna entità in quel punto.');
+      if (hit) { t.entity(hit, world, e.shiftKey); this.refresh(); }
+      else if (t.entityMiss(world)) this.refresh();
+      else this.msg('Nessuna entità in quel punto.');
       return;
     }
     if (t && t.mode !== 'select') return;
@@ -603,6 +687,8 @@ export class App implements Host {
   private feedPoint(p: Vec) {
     if (!this.tool) return;
     this.lastPoint = p;
+    this.snapOnce = null;
+    this.acquired = [];
     this.tool.point(p);
     this.updateCursor();
     this.refresh();
@@ -613,7 +699,10 @@ export class App implements Host {
     if (e.key === 'Enter' || (e.key === ' ' && (!t || t.mode !== 'text'))) {
       e.preventDefault();
       const first = this.suggestEl.querySelector<HTMLElement>('.sg.active');
-      const val = !t && first && e.key === 'Enter' && this.input.value.trim() && !findCommand(this.input.value) ? first.dataset.cmd! : this.input.value;
+      // Invio completa il comando suggerito solo da due lettere in su: una lettera sola che non è un
+      // comando (una risposta S o N arrivata tardi) non deve lanciare NUOVO o SALVA.
+      const typed = this.input.value.trim();
+      const val = !t && first && e.key === 'Enter' && typed.length >= 2 && !findCommand(typed) ? first.dataset.cmd! : this.input.value;
       this.input.value = '';
       this.renderSuggest();
       this.submit(val);
@@ -662,6 +751,7 @@ export class App implements Host {
       F8: () => this.toggle('ortho'),
       F9: () => this.toggle('snap'),
       F10: () => this.toggle('polar'),
+      F11: () => this.toggle('otrack'),
     };
     if (fkeys[k]) { e.preventDefault(); fkeys[k](); return; }
     if (ctrl) {
@@ -703,7 +793,8 @@ export class App implements Host {
     if (!silent) this.msg('*Annullato*');
     this.tool = null;
     this.boxStart = null;
-    this.setSelection([]);
+    // se dietro c'è un comando in attesa (annullato solo lo zoom), la sua selezione resta
+    if (!this.suspended) this.setSelection([]);
     this.done();
   }
 
@@ -721,13 +812,22 @@ export class App implements Host {
     if (!s) {
       if (t.mode === 'select') {
         this.boxStart = null;
+        if (this.selection.size) this.prevSelection = [...this.selection];
         t.selectDone();
       } else t.enter();
       this.refresh();
       return;
     }
+    // Prima la sigla esatta di un'opzione, poi le parole chiave, e solo dopo l'inizio di un'etichetta:
+    // altrimenti CEN diventerebbe l'opzione Centro, INT l'opzione Interno, FIN l'opzione Finestra.
+    const exact = t.matchOption(s, true);
+    if (exact) { t.option(exact); this.refresh(); return; }
+    if (t.mode === 'select' && this.selectKeyword(s)) return;
+    if (t.mode === 'point' && this.snapKeyword(s)) return;
     const opt = t.matchOption(s);
     if (opt) { t.option(opt); this.refresh(); return; }
+    const view = this.viewCommand(s);
+    if (view) { this.run(view); return; }
     if (t.mode !== 'point') {
       if (!t.text(s)) this.msg('Opzione non valida.');
       this.refresh();
@@ -735,14 +835,62 @@ export class App implements Host {
     }
     if (t.numberAsText && !s.startsWith('#') && t.text(s)) {
       // a questo passo si aspetta un numero, e la virgola è la virgola dei decimali
-      if (/^[-+]?[\d.]+,[-+]?[\d.]+$/.test(s)) this.msg(`"${s}" letto come numero con la virgola. Per indicare un punto a questo passo: un clic, oppure #x,y.`);
+      if (/^[-+]?\d{2,}(\.\d+)?,\d{2,}$/.test(s)) this.msg(`"${s}" letto come numero con la virgola. Per indicare un punto a questo passo: un clic, oppure #x,y.`);
       this.refresh();
       return;
     }
     const p = parsePoint(s, this.lastPoint, t.base, this.snap?.p ?? this.cursor);
-    if (p) { this.feedPoint(p); return; }
+    if (p) {
+      // in metri "2,40" dopo un primo punto è quasi sempre una distanza scritta con la virgola: qui però è il punto (2; 40)
+      if (t.base && this.doc.settings.units === 'm' && /^[-+]?\d+,\d+$/.test(s)) this.msg(`"${s}" letto come il punto (${s.replace(',', '; ')}). Per una distanza con i decimali usare il punto: ${s.replace(',', '.')}`);
+      this.feedPoint(p);
+      return;
+    }
     if (t.text(s)) { this.refresh(); return; }
     this.msg('Punto o opzione non validi. Esempi: 100,50   @200,0   @300<45   oppure una distanza.');
+  }
+
+  /** Zoom e pan digitati durante un comando: Z, ZE, PAN, oppure qualunque comando di vista con l'apostrofo ('Z). */
+  private viewCommand(s: string): string | null {
+    const d = findCommand(s);
+    if (!d || !['ZOOM', 'PAN', 'ZOOMEXTENTS', 'REGEN'].includes(d.name)) return null;
+    return s.startsWith('\'') || ['Z', 'ZOOM', 'ZE', 'PAN'].includes(s.toUpperCase()) ? d.name : null;
+  }
+
+  /** Alla richiesta "Selezionare entità": TUTTO, Ultimo, Precedente. */
+  private selectKeyword(s: string): boolean {
+    const u = s.toUpperCase();
+    const doc = this.doc;
+    let ids: number[] | null = null;
+    if (['TUTTO', 'TUTTI', 'TUTTE', 'ALL', 'T'].includes(u)) ids = doc.ents.filter(e => doc.isEditable(e)).map(e => e.id);
+    else if (['ULTIMO', 'ULTIMA', 'U', 'LAST', 'L'].includes(u)) {
+      const last = [...doc.ents].reverse().find(e => doc.isEditable(e));
+      ids = last ? this.groupOf(last) : [];
+    } else if (['PRECEDENTE', 'P', 'PREVIOUS'].includes(u)) {
+      ids = this.prevSelection.filter(id => { const e = doc.byId(id); return !!e && doc.isEditable(e); });
+    }
+    if (!ids) return false;
+    const sel = new Set(this.selection);
+    ids.forEach(i => sel.add(i));
+    this.setSelection(sel);
+    this.msg(`${ids.length} trovate, ${sel.size} selezionate in totale.`);
+    this.refresh();
+    return true;
+  }
+
+  /** Snap digitato mentre si chiede un punto: vale solo per quel punto. */
+  private snapKeyword(s: string): boolean {
+    const words: Record<string, SnapKind | 'none'> = {
+      FIN: 'end', END: 'end', NOD: 'end', MED: 'mid', MID: 'mid', INT: 'int', PER: 'perp', PERP: 'perp',
+      CEN: 'cen', QUA: 'quad', QUAD: 'quad', VIC: 'near', NEA: 'near', INS: 'ins', NES: 'none', NON: 'none',
+    };
+    const k = words[s.toUpperCase()];
+    if (!k) return false;
+    this.snapOnce = k;
+    this.msg(k === 'none' ? 'Nessuno snap per il prossimo punto.' : `Snap ${SNAP_LABEL[k]} per il prossimo punto.`);
+    this.updateCursor();
+    this.refresh();
+    return true;
   }
 
   private renderPrompt() {
@@ -832,7 +980,11 @@ export class App implements Host {
       case 'properties': $('props-panel').classList.add('flash'); setTimeout(() => $('props-panel').classList.remove('flash'), 800); break;
       case 'settings': settingsDialog(doc, this.snapSt, (s, convert) => {
         const from = doc.settings.units, to = s.units;
-        const converting = convert && to !== from;
+        if (doc.editing && to !== from) {
+          this.msg('Durante la modifica di un blocco le unità non si cambiano: prima CHIUDIBLOCCO. Le altre impostazioni sono state salvate.');
+          s.units = from;
+        }
+        const converting = convert && s.units !== from;
         doc.edit(converting ? 'Cambio unità' : 'Impostazioni', () => {
           // i valori della finestra sono ancora nell'unità di prima: si convertono insieme al disegno
           doc.settings = converting ? { ...s, units: from } : s;
@@ -848,6 +1000,9 @@ export class App implements Host {
         this.updateStatus();
       }); break;
       case 'help': helpDialog(); break;
+      case 'purge': purgeBlocks(this); break;
+      case 'layunisolate': layerAction(this, 'unisolate'); break;
+      case 'layallon': layerAction(this, 'allon'); break;
     }
   }
 
@@ -856,7 +1011,7 @@ export class App implements Host {
     this.setSelection([...this.selection].filter(i => ids.has(i)));
   }
 
-  private toggle(what: 'osnap' | 'grid' | 'ortho' | 'snap' | 'polar' | 'lwt') {
+  private toggle(what: 'osnap' | 'grid' | 'ortho' | 'snap' | 'polar' | 'lwt' | 'otrack') {
     const s = this.snapSt;
     let on = false;
     if (what === 'osnap') on = s.osnap = !s.osnap;
@@ -864,8 +1019,9 @@ export class App implements Host {
     else if (what === 'ortho') { on = s.ortho = !s.ortho; if (on) s.polar = false; }
     else if (what === 'polar') { on = s.polar = !s.polar; if (on) s.ortho = false; }
     else if (what === 'snap') on = s.gridSnap = !s.gridSnap;
+    else if (what === 'otrack') { on = s.otrack = !s.otrack; this.acquired = []; }
     else { on = this.lwt = !this.lwt; this.baseDirty = true; }
-    const names = { osnap: 'Snap ad oggetto', grid: 'Griglia', ortho: 'Orto', snap: 'Snap griglia', polar: 'Polare', lwt: 'Spessori' };
+    const names = { osnap: 'Snap ad oggetto', grid: 'Griglia', ortho: 'Orto', snap: 'Snap griglia', polar: 'Polare', lwt: 'Spessori', otrack: 'Puntamento snap' };
     this.msg(`<${names[what]} ${on ? 'attivato' : 'disattivato'}>`);
     this.updateStatus();
     this.updateCursor();
@@ -879,12 +1035,12 @@ export class App implements Host {
     const groups: [string, [string, string, string][]][] = [
       ['File', [['new', 'NEW', 'Nuovo (Ctrl+N)'], ['open', 'OPEN', 'Apri disegno, DXF o DWG (Ctrl+O)'], ['save', 'SAVE', 'Salva (Ctrl+S)'], ['import', 'IMPORT', 'Importa DXF/DWG nel disegno'], ['export', 'DXFOUT', 'Esporta DXF'], ['print', 'PRINT', 'Stampa (Ctrl+P)']]],
       ['', [['undo', 'UNDO', 'Annulla (Ctrl+Z)'], ['redo', 'REDO', 'Ripristina (Ctrl+Y)']]],
-      ['Disegno', [['line', 'LINE', 'Linea (L)'], ['pline', 'PLINE', 'Polilinea (PL)'], ['rect', 'RECTANGLE', 'Rettangolo (REC)'], ['circle', 'CIRCLE', 'Cerchio (C)'], ['arc', 'ARC', 'Arco (A)'], ['ellipse', 'ELLIPSE', 'Ellisse (EL)'], ['spline', 'SPLINE', 'Spline (SPL)'], ['text', 'TEXT', 'Testo (T)'], ['hatch', 'HATCH', 'Tratteggio (H)']]],
+      ['Disegno', [['line', 'LINE', 'Linea (L)'], ['pline', 'PLINE', 'Polilinea (PL)'], ['rect', 'RECTANGLE', 'Rettangolo (REC)'], ['circle', 'CIRCLE', 'Cerchio (C)'], ['arc', 'ARC', 'Arco (A)'], ['polygon', 'POLYGON', 'Poligono (POL)'], ['ellipse', 'ELLIPSE', 'Ellisse (EL)'], ['spline', 'SPLINE', 'Spline (SPL)'], ['point', 'POINT', 'Punto (PUNTO)'], ['text', 'TEXT', 'Testo (T)'], ['hatch', 'HATCH', 'Tratteggio e retini (H)'], ['image', 'IMAGE', 'Inserisci immagine JPG o PNG (IMMAGINE)']]],
       ['Planimetria', [['wall', 'WALL', 'Muro (MURO)'], ['door', 'DOOR', 'Porta (PORTA)'], ['window', 'WINDOW', 'Finestra (FINESTRA)'], ['room', 'ROOM', 'Locale con superficie (LOCALE)']]],
-      ['Quote', [['dimlin', 'DIMLINEAR', 'Quota lineare (DLI)'], ['dimali', 'DIMALIGNED', 'Quota allineata (DAL)'], ['dimcont', 'DIMCONTINUE', 'Quota continua (DCO)'], ['dimrad', 'DIMRADIUS', 'Quota raggio (DRA)'], ['dimdia', 'DIMDIAMETER', 'Quota diametro (DDI)'], ['dimang', 'DIMANGULAR', 'Quota angolare (DAN)']]],
-      ['Blocchi', [['block', 'BLOCK', 'Crea blocco dalla selezione (B)'], ['insert', 'INSERT', 'Inserisci blocco (I)']]],
-      ['Modifica', [['move', 'MOVE', 'Sposta (M)'], ['copy', 'COPY', 'Copia (CO)'], ['rotate', 'ROTATE', 'Ruota (RO)'], ['mirror', 'MIRROR', 'Specchio (MI)'], ['scale', 'SCALE', 'Scala (SC)'], ['offset', 'OFFSET', 'Offset (O)'], ['trim', 'TRIM', 'Taglia (TR)'], ['extend', 'EXTEND', 'Estendi (EX)'], ['fillet', 'FILLET', 'Raccorda (F)'], ['chamfer', 'CHAMFER', 'Smusso (CHA)'], ['array', 'ARRAY', 'Serie (AR)'], ['stretch', 'STRETCH', 'Stira (S)'], ['join', 'JOIN', 'Unisci (J)'], ['explode', 'EXPLODE', 'Esplodi (X)'], ['matchprop', 'MATCHPROP', 'Copia proprietà: layer, colore, stile di quote e testi (MA)'], ['erase', 'ERASE', 'Cancella (E, Canc)']]],
-      ['Vista', [['zoomext', 'ZOOMEXTENTS', 'Zoom estensioni (ZE, doppio clic rotella)'], ['zoomwin', 'ZOOM', 'Zoom (Z)'], ['pan', 'PAN', 'Pan (P)'], ['dist', 'DIST', 'Distanza (DI)'], ['area', 'AREA', 'Area (AA)']]],
+      ['Quote', [['dimlin', 'DIMLINEAR', 'Quota lineare (DLI)'], ['dimali', 'DIMALIGNED', 'Quota allineata (DAL)'], ['dimcont', 'DIMCONTINUE', 'Quota continua (DCO)'], ['dimrad', 'DIMRADIUS', 'Quota raggio (DRA)'], ['dimdia', 'DIMDIAMETER', 'Quota diametro (DDI)'], ['dimbase', 'DIMBASELINE', 'Quota dalla linea di base (DBA)'], ['dimang', 'DIMANGULAR', 'Quota angolare (DAN)'], ['leader', 'LEADER', 'Direttrice con testo (LE)']]],
+      ['Blocchi', [['block', 'BLOCK', 'Crea blocco dalla selezione (B)'], ['insert', 'INSERT', 'Inserisci blocco (I)'], ['bedit', 'BEDIT', 'Modifica blocco sul posto (BE); per finire CHIUDIBLOCCO']]],
+      ['Modifica', [['move', 'MOVE', 'Sposta (M)'], ['copy', 'COPY', 'Copia (CO)'], ['rotate', 'ROTATE', 'Ruota (RO)'], ['mirror', 'MIRROR', 'Specchio (MI)'], ['scale', 'SCALE', 'Scala (SC)'], ['offset', 'OFFSET', 'Offset (O)'], ['trim', 'TRIM', 'Taglia (TR)'], ['extend', 'EXTEND', 'Estendi (EX)'], ['fillet', 'FILLET', 'Raccorda (F)'], ['chamfer', 'CHAMFER', 'Smusso (CHA)'], ['array', 'ARRAY', 'Serie (AR)'], ['break', 'BREAK', 'Spezza (BR)'], ['lengthen', 'LENGTHEN', 'Allunga o accorcia (LEN)'], ['divide', 'DIVIDE', 'Dividi in parti uguali (DIV)'], ['pedit', 'PEDIT', 'Modifica polilinea (PE)'], ['stretch', 'STRETCH', 'Stira (S)'], ['join', 'JOIN', 'Unisci (J)'], ['explode', 'EXPLODE', 'Esplodi (X)'], ['matchprop', 'MATCHPROP', 'Copia proprietà: layer, colore, stile di quote e testi (MA)'], ['erase', 'ERASE', 'Cancella (E, Canc)']]],
+      ['Vista', [['zoomext', 'ZOOMEXTENTS', 'Zoom estensioni (ZE, doppio clic rotella)'], ['zoomwin', 'ZOOM', 'Zoom (Z)'], ['pan', 'PAN', 'Pan (P)'], ['dist', 'DIST', 'Distanza (DI)'], ['area', 'AREA', 'Area (AA): per vertici, clic dentro un\'area chiusa, o di un oggetto']]],
       ['', [['settings', 'SETTINGS', 'Impostazioni (DS)'], ['help', 'HELP', 'Comandi e scorciatoie (F1)']]],
     ];
     const brand = document.createElement('div');
@@ -912,8 +1068,8 @@ export class App implements Host {
   private buildStatus() {
     const st = $('status');
     st.innerHTML = `<span id="coords" class="coords"></span><span class="spacer"></span>`;
-    const toggles: [string, string, 'grid' | 'snap' | 'ortho' | 'polar' | 'osnap' | 'lwt'][] = [
-      ['GRIGLIA', 'F7', 'grid'], ['SNAP', 'F9', 'snap'], ['ORTO', 'F8', 'ortho'], ['POLARE', 'F10', 'polar'], ['ESNAP', 'F3', 'osnap'], ['SPESSORI', '', 'lwt'],
+    const toggles: [string, string, 'grid' | 'snap' | 'ortho' | 'polar' | 'osnap' | 'lwt' | 'otrack'][] = [
+      ['GRIGLIA', 'F7', 'grid'], ['SNAP', 'F9', 'snap'], ['ORTO', 'F8', 'ortho'], ['POLARE', 'F10', 'polar'], ['ESNAP', 'F3', 'osnap'], ['PUNTAMENTO', 'F11', 'otrack'], ['SPESSORI', '', 'lwt'],
     ];
     for (const [label, key, what] of toggles) {
       const b = document.createElement('button');
@@ -935,11 +1091,15 @@ export class App implements Host {
 
   private updateStatus() {
     const s = this.snapSt;
-    const on: Record<string, boolean> = { grid: this.gridOn, snap: s.gridSnap, ortho: s.ortho, polar: s.polar, osnap: s.osnap, lwt: this.lwt };
+    const on: Record<string, boolean> = { grid: this.gridOn, snap: s.gridSnap, ortho: s.ortho, polar: s.polar, osnap: s.osnap, lwt: this.lwt, otrack: s.otrack };
     for (const [k, val] of Object.entries(on)) $(`st-${k}`)?.classList.toggle('on', val);
     const info = $('st-info');
-    if (info) info.textContent = `${UNIT_LABEL[this.doc.settings.units]} · layer ${this.doc.current}`;
-    document.title = `${this.fileName}${this.doc.dirty ? ' *' : ''} – Kalista`;
+    const ed = this.doc.editing;
+    if (info) {
+      info.textContent = `${ed ? `MODIFICA DEL BLOCCO "${ed.name}" (CHIUDIBLOCCO per finire) · ` : ''}${UNIT_LABEL[this.doc.settings.units]} · layer ${this.doc.current}`;
+      info.classList.toggle('editing', !!ed);
+    }
+    document.title = `${this.fileName}${ed ? ` [blocco ${ed.name}]` : ''}${this.doc.dirty ? ' *' : ''} – Kalista`;
   }
 
   private updateCoords() {
@@ -950,6 +1110,10 @@ export class App implements Host {
   }
 
   private onDocChange() {
+    for (const [name, n] of this.doc.hiddenAdds) this.msg(`Attenzione: ${n} entità create sul layer ${name}, che è nascosto: non si vedono finché non lo si riaccende (ACCENDILAYER).`);
+    this.doc.hiddenAdds.clear();
+    // l'entità sotto il mouse può essere stata cambiata (dal pannello, dal pennello): va ricercata, non ridisegnata vecchia
+    this.hover = null;
     this.baseDirty = true;
     this.schedule();
     this.panels.refresh();
@@ -997,7 +1161,7 @@ export class App implements Host {
     this.fileHandle = null;
     this.fileName = 'Senza nome';
     this.setSelection([]);
-    this.printWin = null;
+    this.forgetDrawing();
     this.defaultView();
     this.updateStatus();
     this.msg('Nuovo disegno.');
@@ -1023,7 +1187,7 @@ export class App implements Host {
       if (ext === 'kalista' || ext === 'planim' || ext === 'json') {
         const d = JSON.parse(new TextDecoder().decode(buf)) as DocData;
         this.setSelection([]);
-        this.printWin = null;
+        this.forgetDrawing();
         this.doc.load(d);
         this.fileHandle = null;
         this.fileName = f.name.replace(/\.(kalista|planim|json)$/i, '');
@@ -1045,7 +1209,7 @@ export class App implements Host {
       }
       if (this.pickMode === 'open') {
         this.setSelection([]);
-        this.printWin = null;
+        this.forgetDrawing();
         this.doc.reset(this.doc.settings.units);
         this.fileHandle = null;
         this.fileName = f.name.replace(/\.(dxf|dwg)$/i, '');
@@ -1061,14 +1225,27 @@ export class App implements Host {
   private mergeImport(r: ImportResult, name: string) {
     const doc = this.doc;
     const groups = new Map<number, number>();
+    // blocchi del file: se nel disegno c'è già un blocco con quel nome ma diverso, quello importato cambia nome
+    const rename = new Map<string, string>();
+    for (const [k, d] of Object.entries(r.blocks)) {
+      if (!doc.blocks[k] || JSON.stringify(doc.blocks[k]) === JSON.stringify(d)) continue;
+      let i = 2;
+      while (doc.blocks[`${k} (${i})`] || r.blocks[`${k} (${i})`]) i++;
+      rename.set(k, `${k} (${i})`);
+    }
+    const ren = <E extends NewEnt | Ent>(e: E): E => (e.t === 'insert' && rename.has(e.name) ? { ...e, name: rename.get(e.name)! } : e);
     doc.edit(`Importa ${name}`, () => {
       for (const l of r.layers) if (!doc.layers.some(x => x.name === l.name)) doc.layers = [...doc.layers, l];
-      doc.addMany(r.ents.map(e => {
+      const defs = Object.fromEntries(Object.entries(r.blocks).map(([k, d]) => [rename.get(k) ?? k, { ents: d.ents.map(ren) }]));
+      if (Object.keys(defs).length) doc.blocks = { ...doc.blocks, ...defs };
+      doc.addMany(r.ents.map(ren).map(e => {
         if (e.g === undefined) return e;
         if (!groups.has(e.g)) groups.set(e.g, doc.newGroupId());
         return { ...e, g: groups.get(e.g) };
       }));
     });
+    const nb = Object.keys(r.blocks).length;
+    if (nb) this.msg(`${nb} blocchi del file sono diventati blocchi di Kalista: si modificano con MODBLOCCO, si aprono con ESPLODI.`);
     const units = r.srcUnits ? `misure del file lette in ${UNIT_LABEL[r.srcUnits]}` : 'unità non dichiarate';
     this.msg(`${r.ents.length} entità importate da ${name} (${units}${r.scale !== 1 ? `, scalate ×${fmtLen(r.scale)} in ${UNIT_LABEL[doc.settings.units]}` : ''}).`);
     if (r.skipped.size) this.msg(`Non importati: ${[...r.skipped].map(([k, n]) => `${k} (${n})`).join(', ')}.`);
@@ -1123,7 +1300,10 @@ export class App implements Host {
         const h = await w.showSaveFilePicker({ suggestedName: `${this.fileName}.dxf`, types: [{ description: 'DXF', accept: { 'image/vnd.dxf': ['.dxf'] } }] });
         await this.writeHandle(h, txt);
       } else this.download(`${this.fileName}.dxf`, txt, 'image/vnd.dxf');
-      this.msg(`Esportato DXF (R12): ${this.doc.ents.length} entità.`);
+      const data = this.doc.toData();
+      this.msg(`Esportato DXF (R12): ${data.ents.length} entità.`);
+      const lost = flatEnts(data.ents, data.blocks ?? {}).filter(e => e.t === 'image').length;
+      if (lost) this.msg(`Attenzione: ${lost} immagini non sono nel DXF, che non le prevede.`);
     } catch (err) {
       if ((err as Error).name !== 'AbortError') this.msg(`Esportazione non riuscita: ${(err as Error).message}`);
     }

@@ -76,7 +76,29 @@ export function layerDash(doc: Doc, layer: Layer, view: View): number[] {
   return px.reduce((a, b) => a + b, 0) < 4 ? [] : px;
 }
 
+const images = new Map<string, HTMLImageElement>();
+let onImageReady: (() => void) | null = null;
+/** Chi disegna chiede di essere avvisato quando un'immagine ha finito di caricarsi, per ridisegnare. */
+export function whenImagesLoad(fn: () => void) { onImageReady = fn; }
+
+function imageOf(src: string): HTMLImageElement | null {
+  let im = images.get(src);
+  if (!im) {
+    im = new Image();
+    im.onload = () => onImageReady?.();
+    im.src = src;
+    images.set(src, im);
+  }
+  return im.complete && im.naturalWidth > 0 ? im : null;
+}
+
 export function paint(g: CanvasRenderingContext2D, view: View, ps: Prim[], st: PaintStyle) {
+  paintPrims(g, view, ps, st);
+  // il tratteggio di linea non deve restare impostato per chi disegna dopo (la griglia, il mirino)
+  g.setLineDash([]);
+}
+
+function paintPrims(g: CanvasRenderingContext2D, view: View, ps: Prim[], st: PaintStyle) {
   g.strokeStyle = st.color;
   g.fillStyle = st.color;
   g.lineWidth = st.lw;
@@ -96,6 +118,18 @@ export function paint(g: CanvasRenderingContext2D, view: View, ps: Prim[], st: P
         if (p.closed) g.closePath();
         if (p.fill) fill(g, p.fill, st, 'nonzero');
         if (p.stroke !== false) g.stroke();
+        break;
+      }
+      case 'img': {
+        const o = view.toScreen(p.p);
+        g.save();
+        g.translate(o.x, o.y);
+        g.rotate(-p.rot);
+        const im = imageOf(p.src);
+        // l'origine è l'angolo in basso a sinistra, e sullo schermo la Y va verso il basso
+        if (im) g.drawImage(im, 0, -p.h * s, p.w * s, p.h * s);
+        else { g.setLineDash([4, 3]); g.strokeRect(0, -p.h * s, p.w * s, p.h * s); }
+        g.restore();
         break;
       }
       case 'area': {
@@ -185,8 +219,8 @@ export function renderDoc(g: CanvasRenderingContext2D, view: View, doc: Doc, opt
       const l = layers.get(e.layer) ?? doc.layers[0];
       paint(g, view, c.p, {
         color: e.color ?? l.color,
-        lw: opts.lwt ? Math.max(1, l.lw * 3.2) : 1,
-        dash: dashes.get(e.layer) ?? [],
+        lw: opts.lwt ? Math.max(1, (e.lw ?? l.lw) * 3.2) : 1,
+        dash: e.lt ? layerDash(doc, { ...l, lt: e.lt }, view) : dashes.get(e.layer) ?? [],
         wallAlpha: 0.42,
         tint: true,
       });

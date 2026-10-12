@@ -1,5 +1,6 @@
 // Comandi di disegno.
 import type { Ent, NewEnt, HAlign, HatchPattern } from '../model/entities';
+import { HATCH_NAMES } from '../model/entities';
 import { arc3 } from '../model/entities';
 import { closedLoopAt, islandsIn } from '../model/ops';
 import { findRegion } from '../model/region';
@@ -14,7 +15,13 @@ export class LineTool extends Tool {
   private pts: Vec[] = [];
   private created = 0;
 
-  start() { this.ask('Specificare punto iniziale'); }
+  start() { this.ask('Specificare punto iniziale (Invio = dall\'ultimo punto)'); }
+
+  /** Invio al primo punto riparte dall'ultimo punto indicato, come in AutoCAD. */
+  enter() {
+    if (!this.pts.length && this.h.lastPoint) this.point(this.h.lastPoint);
+    else super.enter();
+  }
 
   private next() {
     const opts = [O('A', 'Annulla')];
@@ -137,9 +144,30 @@ export class PolylineTool extends Tool {
 export class RectTool extends Tool {
   readonly name = 'RETTANGOLO';
   private a: Vec | null = null;
+  /** dimensioni digitate con l'opzione Dimensioni: poi basta indicare da che parte va il rettangolo */
+  private size: { w?: number; h?: number } | null = null;
   start() { this.ask('Specificare primo angolo'); }
-  point(p: Vec) {
-    if (!this.a) { this.a = p; this.base = p; this.ask('Specificare angolo opposto (oppure @larghezza,altezza)'); return; }
+  private askCorner() { this.ask('Specificare angolo opposto (oppure @larghezza,altezza) o', [O('D', 'Dimensioni')]); }
+  option(k: string) {
+    if (k === 'D' && this.a) { this.size = {}; this.ask('Larghezza', [], undefined, 'none'); }
+  }
+  text(s: string): boolean {
+    const n = parseNum(s);
+    if (n === null || !this.size || this.size.h !== undefined) return false;
+    if (n <= 0) { this.h.msg('Serve un valore maggiore di zero.'); return true; }
+    if (this.size.w === undefined) { this.size.w = n; this.ask('Altezza', [], undefined, 'none'); }
+    else { this.size.h = n; this.ask('Indicare da che parte del primo angolo va il rettangolo'); }
+    return true;
+  }
+  /** Angolo opposto: quello indicato, oppure quello dato dalle dimensioni nel quadrante del punto. */
+  private corner(p: Vec): Vec {
+    const a = this.a!, z = this.size;
+    if (z?.w === undefined || z.h === undefined) return p;
+    return v(a.x + (p.x >= a.x ? z.w : -z.w), a.y + (p.y >= a.y ? z.h : -z.h));
+  }
+  point(q: Vec) {
+    if (!this.a) { this.a = q; this.base = q; this.askCorner(); return; }
+    const p = this.corner(q);
     if (Math.abs(p.x - this.a.x) < 1e-12 || Math.abs(p.y - this.a.y) < 1e-12) return;
     const e = this.rect(this.a, p);
     this.h.doc.edit('Rettangolo', () => { this.h.doc.add(e); });
@@ -148,7 +176,7 @@ export class RectTool extends Tool {
   private rect(a: Vec, b: Vec): NewEnt {
     return { t: 'poly', pts: [a, v(b.x, a.y), b, v(a.x, b.y)], closed: true, layer: this.h.doc.current };
   }
-  preview(p: Vec): NewEnt[] { return this.a ? [this.rect(this.a, p)] : []; }
+  preview(p: Vec): NewEnt[] { return this.a && this.mode === 'point' ? [this.rect(this.a, this.corner(p))] : []; }
 }
 
 // ---------------------------------------------------------------- ELLISSE
@@ -159,14 +187,39 @@ export class EllipseTool extends Tool {
   private p1: Vec | null = null;
   private c: Vec | null = null;
   private a: Vec | null = null;
+  /** arco di ellisse: dopo la forma si chiedono i due estremi */
+  private arc = false;
+  private k = 0;
+  private a0: number | null = null;
 
-  start() { this.ask('Specificare primo estremo dell\'asse o', [O('C', 'Centro')]); }
+  start() { this.ask(`Specificare primo estremo dell'asse${this.arc ? ' (arco di ellisse)' : ''} o`, this.arc ? [O('C', 'Centro')] : [O('C', 'Centro'), O('A', 'Arco')]); }
 
   option(k: string) {
-    if (k === 'C' && !this.p1 && !this.c) { this.byCenter = true; this.ask('Specificare centro dell\'ellisse'); }
+    if (this.p1 || this.c) return;
+    if (k === 'C') { this.byCenter = true; this.ask('Specificare centro dell\'ellisse'); }
+    else if (k === 'A') { this.arc = true; this.start(); }
+  }
+
+  /** Parametro dell'ellisse nella direzione del punto p visto dal centro. */
+  private param(p: Vec): number {
+    const c = this.c!, a = this.a!;
+    const d = sub(p, c), L = len(a);
+    const ux = v(a.x / L, a.y / L);
+    return Math.atan2((-d.x * ux.y + d.y * ux.x) / (L * this.k), (d.x * ux.x + d.y * ux.y) / L);
   }
 
   point(p: Vec) {
+    if (this.c && this.a && this.k) {
+      if (dist(this.c, p) < 1e-9) return;
+      if (this.a0 === null) { this.a0 = this.param(p); this.ask('Specificare la direzione dell\'estremo finale (in senso antiorario)'); return; }
+      const e = this.make(this.k * len(this.a));
+      if (!e || e.t !== 'ellipse') return;
+      const a1 = this.param(p);
+      if (Math.abs(Math.sin((a1 - this.a0) / 2)) < 1e-9) return;
+      this.h.doc.edit('Arco di ellisse', () => { this.h.doc.add({ ...e, a0: this.a0!, a1 }); });
+      this.h.done();
+      return;
+    }
     if (this.c && this.a) { this.commit(dist(this.c, p)); return; }
     if (this.byCenter) {
       if (!this.c) { this.c = p; this.base = p; this.ask('Specificare estremo dell\'asse'); return; }
@@ -192,11 +245,23 @@ export class EllipseTool extends Tool {
   private commit(d: number) {
     const e = this.make(d);
     if (!e) return;
+    if (this.arc) {
+      this.k = d / len(this.a!);
+      this.base = this.c;
+      this.ask('Specificare la direzione dell\'estremo iniziale');
+      return;
+    }
     this.h.doc.edit('Ellisse', () => { this.h.doc.add(e); });
     this.h.done();
   }
 
   preview(p: Vec): NewEnt[] {
+    if (this.c && this.a && this.k) {
+      const e = this.make(this.k * len(this.a));
+      if (!e || e.t !== 'ellipse' || dist(this.c, p) < 1e-9) return [];
+      const ray: NewEnt = { t: 'line', a: this.c, b: p, layer: this.h.doc.current };
+      return this.a0 === null ? [e, ray] : [{ ...e, a0: this.a0, a1: this.param(p) }, ray];
+    }
     if (this.c && this.a) { const e = this.make(dist(this.c, p)); return e ? [e] : []; }
     const from = this.byCenter ? this.c : this.p1;
     return from ? [{ t: 'line', a: from, b: p, layer: this.h.doc.current }] : [];
@@ -473,7 +538,15 @@ export class TextTool extends Tool {
 
 // ---------------------------------------------------------------- TRATTEGGIO
 
-const PATTERNS: Record<string, HatchPattern> = { SOLIDO: 'solid', SOLID: 'solid', ANSI31: 'ansi31', ANSI37: 'ansi37' };
+/** Retini: sigla per sceglierli dall'opzione Pattern, nome mostrato. */
+const PAT_OPTS: [string, string, HatchPattern][] = [
+  ['PI', 'PIeno', 'solid'], ['45', '45 gradi', 'ansi31'], ['X', 'incrociato (X)', 'ansi37'], ['LI', 'LInee', 'lines'],
+  ['Q', 'Quadretti', 'grid'], ['M', 'Mattoni', 'brick'], ['T', 'Tratteggiate', 'dash'], ['PU', 'PUntinato', 'dots'],
+];
+const PATTERNS: Record<string, HatchPattern> = {
+  SOLIDO: 'solid', SOLID: 'solid', PIENO: 'solid', ANSI31: 'ansi31', ANSI37: 'ansi37', LINEE: 'lines', QUADRETTI: 'grid',
+  PIASTRELLE: 'grid', MATTONI: 'brick', TRATTEGGIATE: 'dash', PUNTINATO: 'dots',
+};
 
 export class HatchTool extends Tool {
   readonly name = 'TRATTEGGIO';
@@ -484,19 +557,19 @@ export class HatchTool extends Tool {
 
   start() {
     this.sub = '';
-    const name = HatchTool.pat === 'solid' ? 'SOLIDO' : HatchTool.pat.toUpperCase();
+    const name = HATCH_NAMES[HatchTool.pat];
     this.ask(`Specificare punto interno (${name}, passo ${fmtLen(this.h.doc.settings.hatchSp)}) o`, [O('S', 'Selezionare oggetto'), O('P', 'Pattern'), O('PA', 'PAsso'), O('AN', 'ANgolo')]);
   }
 
   option(k: string) {
     if (this.sub === 'pat') {
-      HatchTool.pat = k === 'SO' ? 'solid' : k === 'A31' ? 'ansi31' : 'ansi37';
+      HatchTool.pat = PAT_OPTS.find(o => o[0] === k)?.[2] ?? HatchTool.pat;
       this.start();
       return;
     }
     if (k === 'S') { this.sub = 'obj'; this.ask('Selezionare polilinea chiusa, cerchio o locale', [], undefined, 'entity'); }
-    else if (k === 'P') { this.sub = 'pat'; this.ask('Pattern', [O('SO', 'SOlido'), O('A31', 'ANSI31 (linee a 45°)'), O('A37', 'ANSI37 (incrociato)')], undefined, 'none'); }
-    else if (k === 'PA') { this.sub = 'sp'; this.numberAsText = true; this.ask('Passo fra le linee', [], fmtLen(this.h.doc.settings.hatchSp)); }
+    else if (k === 'P') { this.sub = 'pat'; this.ask('Retino', PAT_OPTS.map(o => O(o[0], o[1])), undefined, 'none'); }
+    else if (k === 'PA') { this.sub = 'sp'; this.numberAsText = true; this.ask('Passo del retino (più grande = retino più largo)', [], fmtLen(this.h.doc.settings.hatchSp)); }
     else if (k === 'AN') { this.sub = 'ang'; this.numberAsText = true; this.ask('Angolo aggiuntivo del pattern', [], fmtLen((HatchTool.ang * 180) / Math.PI)); }
   }
 

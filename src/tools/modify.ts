@@ -1,9 +1,9 @@
 // Comandi di modifica.
-import type { Ent, NewEnt, LineE, WallE } from '../model/entities';
+import type { Ent, NewEnt, LineE, PolyE } from '../model/entities';
 import { transform, explode, stretch, entBox, editCurves } from '../model/entities';
-import { offsetEnt, trimEnt, extendEnt, fillet, chamfer, arrayRect, arrayPolar, joinEnts, boundaryCurves } from '../model/ops';
+import { offsetEnt, trimEnt, extendEnt, fillet, chamfer, cornerPoly, filletPolyAll, arrayRect, arrayPolar, joinEnts, boundaryCurves } from '../model/ops';
 import {
-  Vec, Box, Mat, Curve, add, sub, dist, angleOf, translate, rotateAbout, scaleAbout, mirrorAcross, inBox, boxOf, emptyBox, boxUnion, boxValid, distToCurve, TAU,
+  Vec, Box, Mat, Curve, add, sub, dist, angleOf, translate, rotateAbout, scaleAbout, mirrorAcross, inBox, boxOf, emptyBox, boxUnion, boxValid, distToCurve, intersect, TAU,
 } from '../model/geom';
 import { Tool, SelTool, O, parseNum, parseAngle, fmtLen } from './base';
 
@@ -262,7 +262,7 @@ export class OffsetTool extends Tool {
   }
 
   entity(e: Ent) {
-    if (!['line', 'poly', 'circle', 'arc', 'wall'].includes(e.t)) { this.h.msg('Offset possibile su linee, polilinee, cerchi, archi e muri.'); return; }
+    if (!['line', 'poly', 'circle', 'arc', 'wall', 'ellipse', 'spline'].includes(e.t)) { this.h.msg('Offset possibile su linee, polilinee, cerchi, archi, muri, ellissi e spline.'); return; }
     this.target = e;
     this.h.setSelection([e.id]);
     this.ask(this.through ? 'Specificare punto di passaggio' : 'Specificare il lato');
@@ -297,7 +297,7 @@ function distanceTo(e: Ent, p: Vec): number {
     const L = Math.hypot(d.x, d.y);
     return L < 1e-12 ? 0 : Math.abs((d.x * (p.y - e.a.y) - d.y * (p.x - e.a.x)) / L);
   }
-  if (e.t === 'poly' && e.bulges?.some(b => Math.abs(b) > 1e-9)) return Math.min(...editCurves(e).map(c => distToCurve(p, c)));
+  if (e.t === 'ellipse' || e.t === 'spline' || (e.t === 'poly' && e.bulges?.some(b => Math.abs(b) > 1e-9))) return Math.min(...editCurves(e).map(c => distToCurve(p, c)));
   if (e.t === 'poly') {
     let best = Infinity;
     const n = e.pts.length;
@@ -318,8 +318,70 @@ abstract class EdgeTool extends Tool {
   protected edges: Curve[] | null = null;
   /** modifiche fatte da questo comando: Annulla non deve toccare quelle di prima */
   protected edits = 0;
+  /** quante modifiche ha fatto ogni clic (una linea di intercettazione ne fa tante): Annulla le toglie insieme */
+  private batches: number[] = [];
   private edgeIds: Set<number> | null = null;
   protected abstract verb: string;
+  /** primo punto della linea di intercettazione, mentre se ne aspetta il secondo */
+  private fence: Vec | null = null;
+
+  /** Taglia o estende e nel punto p; false se lì non c'è niente da fare. */
+  protected abstract act(e: Ent, p: Vec, other: boolean): boolean;
+
+  entity(e: Ent, p: Vec, shift = false) {
+    if (!this.h.doc.isEditable(e)) return;
+    // Maiusc scambia i due comandi: in TAGLIA estende, in ESTENDI taglia
+    if (this.act(e, p, shift)) this.batches.push(1);
+    else this.h.msg(shift !== (this.verb === 'tagliare') ? 'Nessuna intersezione con i bordi: niente da tagliare.' : 'Nessun bordo da raggiungere in quella direzione.');
+    this.askPick();
+  }
+
+  /** Un clic a vuoto apre una linea di intercettazione: tutto ciò che attraversa viene tagliato o esteso. */
+  entityMiss(p: Vec): boolean {
+    this.fence = p;
+    this.base = p;
+    this.ask('Specificare il secondo punto della linea di intercettazione');
+    return true;
+  }
+
+  point(p: Vec) {
+    const a = this.fence;
+    if (!a) return;
+    this.fence = null;
+    this.base = null;
+    const doc = this.h.doc;
+    const line: Curve = { k: 's', a, b: p };
+    let n = 0;
+    for (const id of doc.ents.map(e => e.id)) {
+      const e = doc.byId(id);
+      if (!e || !doc.isEditable(e) || !doc.layer(e.layer).visible) continue;
+      const hit = editCurves(e, doc.ctx()).flatMap(c => intersect(c, line))[0];
+      if (hit && this.act(e, hit, false)) n++;
+    }
+    if (n) this.batches.push(n);
+    this.h.msg(n ? `${n} entità modificate.` : 'La linea non attraversa niente che si possa ' + this.verb + '.');
+    this.askPick();
+  }
+
+  preview(p: Vec): NewEnt[] {
+    return this.fence ? [{ t: 'line', a: this.fence, b: p, layer: this.h.doc.current, color: '#ff9800' }] : [];
+  }
+
+  protected doTrim(e: Ent, p: Vec): boolean {
+    const r = trimEnt(e, this.cutters(e.id), p);
+    if (!r) return false;
+    this.h.doc.edit('Taglia', () => { this.h.doc.remove([e.id]); this.h.doc.addMany(e.g === undefined ? r : r.map(x => ({ ...x, g: e.g }))); });
+    this.edits++;
+    return true;
+  }
+
+  protected doExtend(e: Ent, p: Vec): boolean {
+    const r = extendEnt(e, this.cutters(e.id), p);
+    if (!r) return false;
+    this.h.doc.edit('Estendi', () => this.h.doc.replace([{ ...r, id: e.id } as Ent]));
+    this.edits++;
+    return true;
+  }
 
   start() {
     const pre = this.h.doc.ents.filter(e => this.h.selection.has(e.id));
@@ -339,7 +401,7 @@ abstract class EdgeTool extends Tool {
   }
 
   protected askPick() {
-    this.ask(`Selezionare l'entità da ${this.verb} (Invio per finire)`, [O('A', 'Annulla')], undefined, 'entity');
+    this.ask(`Selezionare l'entità da ${this.verb}, o un punto a vuoto per una linea di intercettazione (Invio per finire)`, [O('A', 'Annulla')], undefined, 'entity');
   }
 
   protected cutters(exclude: number): Curve[] {
@@ -350,7 +412,8 @@ abstract class EdgeTool extends Tool {
 
   option(k: string) {
     if (k === 'A') {
-      if (this.edits) { this.h.doc.undo(); this.edits--; } else this.h.msg('Niente da annullare in questo comando.');
+      const k = this.batches.pop();
+      if (k) { for (let i = 0; i < k; i++) this.h.doc.undo(); this.edits -= k; } else this.h.msg('Niente da annullare in questo comando.');
       this.askPick();
     }
   }
@@ -361,45 +424,47 @@ abstract class EdgeTool extends Tool {
 export class TrimTool extends EdgeTool {
   readonly name = 'TAGLIA';
   protected verb = 'tagliare';
-  entity(e: Ent, p: Vec) {
-    if (!this.h.doc.isEditable(e)) return;
-    const r = trimEnt(e, this.cutters(e.id), p);
-    if (!r) { this.h.msg('Nessuna intersezione con i bordi: niente da tagliare.'); return; }
-    this.h.doc.edit('Taglia', () => { this.h.doc.remove([e.id]); this.h.doc.addMany(r); });
-    this.edits++;
-    this.askPick();
-  }
+  protected act(e: Ent, p: Vec, other: boolean): boolean { return other ? this.doExtend(e, p) : this.doTrim(e, p); }
 }
 
 export class ExtendTool extends EdgeTool {
   readonly name = 'ESTENDI';
   protected verb = 'estendere';
-  entity(e: Ent, p: Vec) {
-    if (!this.h.doc.isEditable(e)) return;
-    const r = extendEnt(e, this.cutters(e.id), p);
-    if (!r) { this.h.msg('Nessun bordo da raggiungere in quella direzione.'); return; }
-    this.h.doc.edit('Estendi', () => this.h.doc.replace([{ ...r, id: e.id } as Ent]));
-    this.edits++;
-    this.askPick();
-  }
+  protected act(e: Ent, p: Vec, other: boolean): boolean { return other ? this.doTrim(e, p) : this.doExtend(e, p); }
 }
 
 // ---------------------------------------------------------------- RACCORDA
 
 export class FilletTool extends Tool {
   readonly name = 'RACCORDA';
-  private first: { e: LineE | WallE; p: Vec } | null = null;
+  private first: { e: Ent; p: Vec } | null = null;
+  /** opzione Polilinea: raccorda tutti gli spigoli della polilinea indicata */
+  private whole = false;
 
   start() { this.askFirst(); }
 
   private askFirst() {
     this.first = null;
+    this.whole = false;
     this.numberAsText = false;
-    this.ask(`Selezionare la prima linea o muro (raggio ${fmtLen(this.h.doc.settings.filletR)}) o`, [O('R', 'Raggio')], undefined, 'entity');
+    this.ask(`Selezionare il primo lato: linea, muro o tratto di polilinea (raggio ${fmtLen(this.h.doc.settings.filletR)}) o`, [O('R', 'Raggio'), O('P', 'Polilinea intera')], undefined, 'entity');
   }
 
   option(k: string) {
     if (k === 'R') { this.numberAsText = true; this.ask('Specificare raggio di raccordo', [], fmtLen(this.h.doc.settings.filletR)); this.mode = 'point'; }
+    else if (k === 'P') { this.whole = true; this.ask('Selezionare la polilinea di cui raccordare tutti gli spigoli', [], undefined, 'entity'); }
+  }
+
+  /** Spigolo di una polilinea (anche di un rettangolo), fra i due tratti indicati. */
+  private polyCorner(e: Ent, p: Vec): boolean {
+    const r = this.h.doc.settings.filletR;
+    const first = this.first!;
+    if (first.e.t !== 'poly' || e.id !== first.e.id) { this.h.msg('Indicare due tratti consecutivi della stessa polilinea. Per raccordare una polilinea con un\'altra entità: prima ESPLODI.'); return false; }
+    if (r <= 1e-12) { this.h.msg('Il raggio è 0 e lo spigolo c\'è già: impostare il raggio con l\'opzione Raggio.'); this.askFirst(); return false; }
+    const out = cornerPoly(first.e, first.p, p, { r });
+    if (!out) { this.h.msg('Raccordo non possibile: servono due tratti dritti consecutivi, e il raggio deve starci.'); return false; }
+    this.h.doc.edit('Raccorda', () => this.h.doc.replace([out]));
+    return true;
   }
 
   text(s: string): boolean {
@@ -411,14 +476,30 @@ export class FilletTool extends Tool {
   }
 
   entity(e: Ent, p: Vec) {
-    if (e.t !== 'line' && e.t !== 'wall') { this.h.msg('Raccordo possibile fra linee o fra muri.'); return; }
+    if (!this.h.doc.isEditable(e)) return;
+    if (this.whole) {
+      if (e.t !== 'poly') { this.h.msg('Serve una polilinea.'); return; }
+      const all = filletPolyAll(e, this.h.doc.settings.filletR);
+      if (!all) { this.h.msg(this.h.doc.settings.filletR > 0 ? 'Nessuno spigolo in cui il raggio ci stia.' : 'Il raggio è 0: impostarlo con l\'opzione Raggio.'); this.askFirst(); return; }
+      this.h.doc.edit('Raccorda', () => this.h.doc.replace([all.poly]));
+      this.h.msg(`${all.n} spigoli raccordati.`);
+      this.h.setSelection([]);
+      this.h.done();
+      return;
+    }
+    if (e.t !== 'line' && e.t !== 'wall' && e.t !== 'poly') { this.h.msg('Raccordo possibile fra linee, fra muri, o fra due tratti di una polilinea.'); return; }
     if (!this.first) {
       this.first = { e, p };
       this.h.setSelection([e.id]);
-      this.ask('Selezionare la seconda linea o muro', [], undefined, 'entity');
+      this.ask('Selezionare il secondo lato', [], undefined, 'entity');
+      return;
+    }
+    if (e.t === 'poly' || this.first.e.t === 'poly') {
+      if (this.polyCorner(e, p)) { this.h.setSelection([]); this.h.done(); }
       return;
     }
     if (e.id === this.first.e.id) return;
+    if (this.first.e.t !== 'line' && this.first.e.t !== 'wall') return;
     if ((e.t === 'wall') !== (this.first.e.t === 'wall')) { this.h.msg('Serve lo stesso tipo: due linee o due muri.'); return; }
     const r = fillet(this.first.e, this.first.p, e, p, this.h.doc.settings.filletR);
     if (!r) { this.h.msg('Raccordo non possibile: entità parallele, o raggio troppo grande per la loro lunghezza.'); return; }
@@ -437,7 +518,7 @@ export class FilletTool extends Tool {
 
 export class ChamferTool extends Tool {
   readonly name = 'SMUSSO';
-  private first: { e: LineE; p: Vec } | null = null;
+  private first: { e: LineE | PolyE; p: Vec } | null = null;
   private asking: 'd1' | 'd2' | null = null;
   private def2 = 0;
 
@@ -469,16 +550,27 @@ export class ChamferTool extends Tool {
   }
 
   entity(e: Ent, p: Vec) {
-    if (e.t !== 'line') { this.h.msg('Smusso possibile fra due linee.'); return; }
+    if (e.t !== 'line' && e.t !== 'poly') { this.h.msg('Smusso possibile fra due linee, o fra due tratti di una polilinea.'); return; }
     if (!this.h.doc.isEditable(e)) return;
     if (!this.first) {
       this.first = { e, p };
       this.h.setSelection([e.id]);
-      this.ask('Selezionare la seconda linea', [], undefined, 'entity');
+      this.ask('Selezionare il secondo lato', [], undefined, 'entity');
+      return;
+    }
+    const s = this.h.doc.settings;
+    if (e.t === 'poly' || this.first.e.t === 'poly') {
+      // spigolo di una polilinea (anche di un rettangolo)
+      if (this.first.e.t !== 'poly' || e.id !== this.first.e.id) { this.h.msg('Indicare due tratti consecutivi della stessa polilinea.'); return; }
+      if (s.chamferD1 + s.chamferD2 <= 1e-12) { this.h.msg('Le distanze sono 0 e lo spigolo c\'è già: impostarle con l\'opzione Distanze.'); this.askFirst(); return; }
+      const out = cornerPoly(this.first.e, this.first.p, p, { d1: s.chamferD1, d2: s.chamferD2 });
+      if (!out) { this.h.msg('Smusso non possibile: servono due tratti dritti consecutivi, e le distanze devono starci.'); return; }
+      this.h.doc.edit('Smusso', () => this.h.doc.replace([out]));
+      this.h.setSelection([]);
+      this.h.done();
       return;
     }
     if (e.id === this.first.e.id) return;
-    const s = this.h.doc.settings;
     const r = chamfer(this.first.e, this.first.p, e, p, s.chamferD1, s.chamferD2);
     if (r === 'parallel') { this.h.msg('Le due linee sono parallele.'); return; }
     if (r === 'short') { this.h.msg('Distanza di smusso troppo grande per queste linee.'); return; }
@@ -703,20 +795,47 @@ export class JoinTool extends SelTool {
 
 export class MatchPropTool extends Tool {
   readonly name = 'CORRISPONDENZA';
+  /** quali proprietà copiare (opzione Impostazioni): valgono finché non si cambiano */
+  static what = { layer: true, color: true, lt: true, lw: true, text: true, special: true };
   private src: Ent | null = null;
-  start() { this.ask('Selezionare l\'entità di origine', [], undefined, 'entity'); }
+
+  start() { this.ask('Selezionare l\'entità di origine o', [O('I', 'Impostazioni')], undefined, 'entity'); }
+
+  option(k: string) {
+    if (k !== 'I') return;
+    const w = MatchPropTool.what;
+    void this.h.choose('Proprietà da copiare', [
+      { key: 'layer', label: 'Layer', on: w.layer },
+      { key: 'color', label: 'Colore', on: w.color },
+      { key: 'lt', label: 'Tipo di linea', on: w.lt },
+      { key: 'lw', label: 'Spessore', on: w.lw },
+      { key: 'text', label: 'Altezza del testo (testi, quote, direttrici)', on: w.text },
+      { key: 'special', label: 'Proprietà dello stesso tipo: spessore dei muri, retino dei tratteggi', on: w.special },
+    ]).then(r => { if (r) Object.assign(w, r); });
+  }
+
   entity(e: Ent) {
-    if (!this.src) { this.src = e; this.ask('Selezionare le entità di destinazione (Invio per finire)', [], undefined, 'entity'); return; }
-    const s = this.src;
-    const upd = { ...e, layer: s.layer } as Ent;
-    if (s.color) upd.color = s.color; else delete upd.color;
-    if (upd.t === 'wall' && s.t === 'wall') upd.th = s.th;
-    if (upd.t === 'text' && s.t === 'text') upd.h = s.h;
-    // fra quote passa lo stile: l'altezza del testo (se l'origine usa quella del disegno, anche la destinazione)
-    if (upd.t === 'dim' && s.t === 'dim') { if (s.h !== undefined) upd.h = s.h; else delete upd.h; }
-    if (upd.t === 'dim' && s.t === 'text') upd.h = s.h;
-    if (upd.t === 'text' && s.t === 'dim') upd.h = s.h ?? this.h.doc.settings.dimH;
-    this.h.doc.edit('Corrispondenza proprietà', () => this.h.doc.replace([upd]));
+    if (!this.src) { this.src = e; this.ask('Selezionare le entità di destinazione (Invio per finire) o', [O('I', 'Impostazioni')], undefined, 'entity'); return; }
+    if (!this.h.doc.isEditable(e)) return;
+    const s = this.src, w = MatchPropTool.what;
+    const upd = { ...e } as Ent;
+    if (w.layer) upd.layer = s.layer;
+    if (w.color) { if (s.color) upd.color = s.color; else delete upd.color; }
+    if (w.lt) { if (s.lt) upd.lt = s.lt; else delete upd.lt; }
+    if (w.lw) { if (s.lw !== undefined) upd.lw = s.lw; else delete upd.lw; }
+    if (w.special) {
+      if (upd.t === 'wall' && s.t === 'wall') upd.th = s.th;
+      if (upd.t === 'hatch' && s.t === 'hatch') { upd.pat = s.pat; upd.sp = s.sp; upd.ang = s.ang; }
+    }
+    if (w.text) {
+      // l'altezza del testo passa fra testi, quote e direttrici; un'origine senza altezza propria usa quella del disegno
+      const own = s.t === 'text' ? s.h : s.t === 'dim' || s.t === 'leader' ? s.h : null;
+      if (own !== null) {
+        if (upd.t === 'text') upd.h = own ?? this.h.doc.settings.dimH;
+        else if (upd.t === 'dim' || upd.t === 'leader') { if (own !== undefined) upd.h = own; else delete upd.h; }
+      }
+    }
+    this.h.doc.edit('Copia proprietà', () => this.h.doc.replace([upd]));
   }
   enter() { this.h.done(); }
 }

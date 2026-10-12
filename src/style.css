@@ -27,6 +27,8 @@ input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(
 #toolbar { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 6px; background: var(--ui); border-bottom: 1px solid var(--line); }
 .units-choice p { margin: 0 0 10px; max-width: 460px; }
 .radio-row { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; cursor: pointer; }
+.st-info.editing { color: var(--warn); font-weight: 600; }
+.checks.column { display: flex; flex-direction: column; gap: 6px; min-width: 320px; }
 .brand { display: flex; align-items: center; gap: 5px; padding: 0 10px 0 2px; margin-right: 2px; border-right: 1px solid var(--line); font-size: 15px; font-weight: 600; letter-spacing: .02em; color: #eaf3ff; user-select: none; }
 .brand small { font-size: 11px; font-weight: 400; color: var(--muted); align-self: flex-end; padding-bottom: 5px; }
 .tb-group { display: flex; gap: 1px; padding: 0 6px 0 0; margin-right: 2px; border-right: 1px solid var(--line); position: relative; padding-top: 11px; }
@@ -37,7 +39,7 @@ input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(
 .tb-btn:active { background: var(--accent-bg); }
 
 /* ---------------------------------------------------------------- area di disegno */
-#main { display: grid; grid-template-columns: 1fr 300px; min-height: 0; }
+#main { display: grid; grid-template-columns: 1fr 340px; min-height: 0; }
 #canvas-wrap { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
 #canvas-wrap canvas { position: absolute; inset: 0; display: block; }
 #overlay { cursor: none; }
@@ -61,7 +63,7 @@ button.small.on { background: var(--accent-bg); border-color: var(--accent); }
 
 .layer-tools { display: flex; gap: 6px; margin-bottom: 6px; }
 .layer-list { display: flex; flex-direction: column; gap: 1px; }
-.layer-row { display: grid; grid-template-columns: 22px 22px 32px 1fr 52px 78px; align-items: center; gap: 3px; padding: 2px 3px; border-radius: 3px; cursor: pointer; }
+.layer-row { display: grid; grid-template-columns: 22px 22px 32px 1fr 52px 78px 18px; align-items: center; gap: 3px; padding: 2px 3px; border-radius: 3px; cursor: pointer; }
 .layer-row:hover { background: var(--ui2); }
 .layer-row.current { background: var(--accent-bg); outline: 1px solid #2f5f93; }
 .layer-row select { font-size: 11px; padding: 1px 2px; }

@@ -75,7 +75,9 @@ export function exportDxf(doc: Doc): string {
   w.g(0, 'SECTION'); w.g(2, 'ENTITIES');
   const ctx = doc.ctx();
   // i blocchi escono aperti nel loro contenuto: il DXF R12 scritto qui non ha definizioni di blocco
-  for (const e of flatEnts(doc.ents, doc.blocks)) writeEnt(w, e, prims(e, ctx));
+  // toData dà sempre il disegno vero, anche mentre si sta modificando un blocco
+  const data = doc.toData();
+  for (const e of flatEnts(data.ents, data.blocks ?? {})) writeEnt(w, e, prims(e, ctx));
   w.g(0, 'ENDSEC');
   w.g(0, 'EOF');
   return w.text();
@@ -85,6 +87,7 @@ function head(w: W, type: string, e: Ent) {
   w.g(0, type);
   w.g(8, layerName(e.layer));
   if (e.color) w.g(62, hexToAci(e.color));
+  if (e.lt) w.g(6, LT_DXF[e.lt]);
 }
 
 function writeEnt(w: W, e: Ent, ps: Prim[]) {
@@ -133,6 +136,7 @@ function writePrim(w: W, e: Ent, p: Prim) {
       head(w, 'SEQEND', e);
       return;
     }
+    case 'img': return; // il DXF R12 non ha immagini
     case 'area':
       for (const l of p.loops) writePrim(w, e, { k: 'pl', pts: l, closed: true });
       return;

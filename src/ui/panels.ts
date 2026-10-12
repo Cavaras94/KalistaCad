@@ -1,10 +1,10 @@
 // Pannelli laterali: proprietà della selezione e layer.
 import type { Ent, HatchPattern, HAlign } from '../model/entities';
-import { TYPE_NAMES, roomArea, dimValue, fmtNum } from '../model/entities';
+import { TYPE_NAMES, HATCH_NAMES, roomArea, dimValue, fmtNum } from '../model/entities';
 import type { Doc, Layer, LineType } from '../model/document';
 import { LT_NAMES, UNIT_MM } from '../model/document';
 import { dist, angleOf, polygonArea } from '../model/geom';
-import { askText } from './dialogs';
+import { askText, confirmBox } from './dialogs';
 
 const LW_LIST = [0.05, 0.09, 0.13, 0.18, 0.25, 0.35, 0.5, 0.7, 1.0];
 
@@ -77,6 +77,16 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
       { label: 'Nome', kind: 'text', get: e => (e.t === 'room' ? e.name : ''), set: (e, v) => (e.t === 'room' ? { ...e, name: v } : null) },
       { label: 'Superficie m²', kind: 'ro', single: true, get: e => (e.t === 'room' ? fmtNum(roomArea(e) * toM2, 2) : '') },
     ];
+    case 'point': return [];
+    case 'image': return [
+      { label: 'Larghezza', kind: 'num', get: e => (e.t === 'image' ? e.w : 0), set: (e, v) => { const n = parse(v); return n === null || n <= 0 || e.t !== 'image' ? null : { ...e, h: (e.h * n) / e.w, w: n }; } },
+      { label: 'Altezza', kind: 'ro', single: true, get: e => (e.t === 'image' ? e.h : 0) },
+      { label: 'Rotazione °', kind: 'num', get: e => (e.t === 'image' ? Math.round(((e.rot * 180) / Math.PI) * 1000) / 1000 : 0), set: (e, v) => { const n = parse(v); return n === null || e.t !== 'image' ? null : { ...e, rot: (n * Math.PI) / 180 }; } },
+    ];
+    case 'leader': return [
+      { label: 'Testo', kind: 'text', get: e => (e.t === 'leader' ? e.s : ''), set: (e, v) => (e.t === 'leader' ? { ...e, s: v } : null) },
+      { label: 'Altezza testo', kind: 'num', get: e => (e.t === 'leader' ? e.h ?? doc.settings.dimH : 0), set: numSet('h') },
+    ];
     case 'ellipse': return [
       { label: 'Semiasse', kind: 'ro', single: true, get: e => (e.t === 'ellipse' ? fmt(Math.hypot(e.a.x, e.a.y)) : '') },
       { label: 'Altro semiasse', kind: 'ro', single: true, get: e => (e.t === 'ellipse' ? fmt(Math.hypot(e.a.x, e.a.y) * e.k) : '') },
@@ -91,8 +101,9 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
       { label: 'Rotazione °', kind: 'num', get: e => (e.t === 'insert' ? Math.round(((e.rot * 180) / Math.PI) * 1000) / 1000 : 0), set: (e, v) => { const n = parse(v); return n === null || e.t !== 'insert' ? null : { ...e, rot: (n * Math.PI) / 180 }; } },
     ];
     case 'hatch': return [
-      { label: 'Pattern', kind: 'select', options: [['solid', 'Solido'], ['ansi31', 'ANSI31 (45°)'], ['ansi37', 'ANSI37 (incrociato)']], get: e => (e.t === 'hatch' ? e.pat : ''), set: (e, v) => (e.t === 'hatch' ? { ...e, pat: v as HatchPattern } : null) },
+      { label: 'Pattern', kind: 'select', options: Object.entries(HATCH_NAMES) as [string, string][], get: e => (e.t === 'hatch' ? e.pat : ''), set: (e, v) => (e.t === 'hatch' ? { ...e, pat: v as HatchPattern } : null) },
       { label: 'Passo', kind: 'num', get: e => (e.t === 'hatch' ? e.sp : 0), set: numSet('sp') },
+      { label: 'Angolo °', kind: 'num', get: e => (e.t === 'hatch' ? Math.round(((e.ang * 180) / Math.PI) * 1000) / 1000 : 0), set: (e, v) => { const n = parse(v); return n === null || e.t !== 'hatch' ? null : { ...e, ang: (n * Math.PI) / 180 }; } },
     ];
     case 'poly': return [
       { label: 'Chiusa', kind: 'bool', get: e => (e.t === 'poly' ? e.closed : false), set: (e, v) => (e.t === 'poly' ? { ...e, closed: v === 'true' } : null) },
@@ -151,6 +162,32 @@ export class Panels {
     bl.onclick = () => doc.edit('Colore DaLayer', () => doc.replace(sel.map(e => { const c = { ...e } as Ent; delete c.color; return c; })));
     crow.append(h('span', { class: 'inline' }, cin, bl));
     el.append(crow);
+
+    // tipo di linea e spessore propri dell'entità; "DaLayer" li toglie
+    const own = (label: string, key: 'lt' | 'lw', choices: [string, string][]) => {
+      const row = h('label', { class: 'prop' }, h('span', {}, label));
+      const vals = new Set(sel.map(e => String(e[key] ?? '')));
+      const s = h('select');
+      if (vals.size > 1) s.append(h('option', { value: '*' }, '— vari —'));
+      s.append(h('option', { value: '' }, 'DaLayer'));
+      for (const [k, lab] of choices) s.append(h('option', { value: k }, lab));
+      s.value = vals.size === 1 ? [...vals][0] : '*';
+      s.onchange = () => {
+        if (s.value === '*') return;
+        const val = s.value;
+        doc.edit(label, () => doc.replace(sel.filter(e => doc.isEditable(e)).map(e => {
+          const c = { ...e } as Ent;
+          if (!val) delete c[key];
+          else if (key === 'lt') c.lt = val as LineType;
+          else c.lw = parseFloat(val);
+          return c;
+        })));
+      };
+      row.append(s);
+      el.append(row);
+    };
+    own('Tipo linea', 'lt', Object.entries(LT_NAMES));
+    own('Spessore', 'lw', LW_LIST.map(w => [String(w), w.toFixed(2)]));
 
     const types = new Set(sel.map(e => e.t));
     if (types.size !== 1) return;
@@ -247,6 +284,7 @@ export class Panels {
         const ren = (e2: Ent): Ent => (e2.layer === old ? ({ ...e2, layer: nn } as Ent) : e2);
         doc.ents = doc.ents.map(ren);
         doc.blocks = Object.fromEntries(Object.entries(doc.blocks).map(([k, b]) => [k, { ents: b.ents.map(ren) }]));
+        if (doc.editing) doc.editing = { ...doc.editing, ents: doc.editing.ents.map(ren) };
         if (doc.current === old) doc.current = nn;
       });
     };
@@ -262,7 +300,17 @@ export class Panels {
     lt.onclick = e => e.stopPropagation();
     lt.onchange = () => upd('Tipo linea layer', () => { l.lt = lt.value as LineType; });
     row.onclick = () => { doc.current = l.name; this.onCurrent(); this.renderLayers(); this.renderProps(); };
-    row.append(eye, lock, color, name, lw, lt);
+    const del = h('button', { class: 'icon-btn', title: l.name === '0' ? 'Il layer 0 non si può eliminare' : 'Elimina il layer' }, '✕');
+    del.disabled = l.name === '0' || !!doc.editing;
+    if (doc.editing) del.title = 'Durante la modifica di un blocco i layer non si eliminano';
+    del.onclick = async e => {
+      e.stopPropagation();
+      const used = doc.layerUse(l.name);
+      if (used && !(await confirmBox('Elimina layer', `Il layer ${l.name} contiene ${used} entità: passeranno sul layer 0. Eliminarlo?`, 'Elimina'))) return;
+      upd('Elimina layer', () => doc.deleteLayer(l.name));
+      this.onCurrent();
+    };
+    row.append(eye, lock, color, name, lw, lt, del);
     return row;
   }
 }

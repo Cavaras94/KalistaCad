@@ -1,6 +1,7 @@
 // Consultazione, vista, appunti, grip.
 import type { Ent, NewEnt } from '../model/entities';
-import { TYPE_NAMES, grips, moveGrip, transform, polyPoints, roomArea, dimValue } from '../model/entities';
+import { TYPE_NAMES, grips, moveGrip, transform, polyPoints, roomArea, dimValue, ellipsePoints, splinePoints, isEllipseArc, imageCorners } from '../model/entities';
+import { findRegion } from '../model/region';
 import { UNIT_MM } from '../model/document';
 import { Vec, dist, angleOf, polygonArea, translate, same, TAU, sweep } from '../model/geom';
 import { Tool, SelTool, O, fmtLen, fmtPt } from './base';
@@ -28,17 +29,38 @@ export class IdTool extends Tool {
 export class AreaTool extends Tool {
   readonly name = 'AREA';
   private pts: Vec[] = [];
-  start() { this.ask('Specificare primo vertice o', [O('O', 'Oggetto')]); }
-  option(k: string) { if (k === 'O') this.ask('Selezionare polilinea chiusa, cerchio o locale', [], undefined, 'entity'); }
+  private inside = false;
+  start() { this.ask('Specificare primo vertice del contorno da misurare, oppure', [O('I', 'Interno (clic dentro un\'area chiusa)'), O('O', 'Oggetto')]); }
+  option(k: string) {
+    if (this.pts.length) return;
+    if (k === 'O') this.ask('Selezionare un contorno chiuso: polilinea, cerchio, ellisse, spline, locale o tratteggio', [], undefined, 'entity');
+    else if (k === 'I') { this.inside = true; this.ask('Specificare un punto dentro l\'area chiusa'); }
+  }
+
+  private loop(pts: Vec[]) {
+    let per = 0;
+    for (let i = 0; i < pts.length; i++) per += dist(pts[i], pts[(i + 1) % pts.length]);
+    this.report(Math.abs(polygonArea(pts)), per);
+  }
 
   private report(area: number, per: number) {
     const u = this.h.doc.settings.units;
     const toM2 = (UNIT_MM[u] / 1000) ** 2;
-    this.h.msg(`Area = ${fmtLen(area)} ${u}² (${fmtLen(Math.round(area * toM2 * 100) / 100)} m²);  Perimetro = ${fmtLen(per)}`);
+    const m2 = `${fmtLen(Math.round(area * toM2 * 100) / 100)} m²`;
+    this.h.msg(`Area = ${u === 'm' ? m2 : `${fmtLen(area)} ${u}² (${m2})`};  Perimetro = ${fmtLen(per)} ${u}`);
     this.h.done();
   }
 
   point(p: Vec) {
+    if (this.inside) {
+      // come LOCALE: il contorno chiuso più stretto attorno al punto, fatto di muri, linee, polilinee…
+      const doc = this.h.doc;
+      const vis = doc.ents.filter(e => doc.layer(e.layer).visible);
+      const loop = findRegion(vis, doc.ctx(), p, doc.settings.wallTh * 30, doc.extents());
+      if (!loop) { this.h.msg('Attorno a quel punto non c\'è un contorno chiuso: controllare che le linee si tocchino agli spigoli.'); return; }
+      this.loop(loop);
+      return;
+    }
     this.pts.push(p);
     this.base = p;
     this.ask(this.pts.length < 3 ? 'Specificare vertice successivo' : 'Specificare vertice successivo o Invio per calcolare');
@@ -53,13 +75,22 @@ export class AreaTool extends Tool {
 
   entity(e: Ent) {
     if (e.t === 'circle') { this.report(Math.PI * e.r * e.r, TAU * e.r); return; }
+    if (e.t === 'hatch') {
+      // il primo contorno è quello esterno, gli altri sono isole da togliere
+      const areas = e.loops.map(l => Math.abs(polygonArea(l)));
+      let per = 0;
+      for (const l of e.loops) for (let i = 0; i < l.length; i++) per += dist(l[i], l[(i + 1) % l.length]);
+      this.report(Math.max(0, 2 * Math.max(...areas) - areas.reduce((a, b) => a + b, 0)), per);
+      return;
+    }
     let pts: Vec[] | null = null;
     if (e.t === 'poly' && e.closed) pts = polyPoints(e);
     else if (e.t === 'room') pts = e.pts;
-    if (!pts) { this.h.msg('Serve un contorno chiuso.'); return; }
-    let per = 0;
-    for (let i = 0; i < pts.length; i++) per += dist(pts[i], pts[(i + 1) % pts.length]);
-    this.report(Math.abs(polygonArea(pts)), per);
+    else if (e.t === 'ellipse' && !isEllipseArc(e)) pts = ellipsePoints(e, 720);
+    else if (e.t === 'spline' && e.closed) pts = splinePoints(e.pts, true);
+    else if (e.t === 'image') pts = imageCorners(e);
+    if (!pts) { this.h.msg('Serve un contorno chiuso. Per una stanza fatta di muri o linee usare l\'opzione Interno.'); return; }
+    this.loop(pts);
   }
 
   preview(p: Vec): NewEnt[] {
@@ -91,6 +122,9 @@ export function describe(e: Ent): string {
     case 'hatch': return `${head} ${e.pat}`;
     case 'ellipse': { const r = Math.hypot(e.a.x, e.a.y); return `${head} centro ${fmtPt(e.c)}, semiassi ${fmtLen(r)} e ${fmtLen(r * e.k)}`; }
     case 'spline': return `${head} ${e.pts.length} punti${e.closed ? ', chiusa' : ''}`;
+    case 'point': return `${head} in ${fmtPt(e.p)}`;
+    case 'image': return `${head} ${fmtLen(e.w)} × ${fmtLen(e.h)} in ${fmtPt(e.p)}`;
+    case 'leader': return `${head} "${e.s}", ${e.pts.length} punti`;
     case 'insert': return `${head} "${e.name}" in ${fmtPt(e.p)}, scala ${fmtLen(e.s)}, rotazione ${deg(e.rot)}°${e.flip ? ', specchiato' : ''}`;
   }
 }
@@ -109,6 +143,8 @@ export class ZoomTool extends Tool {
     this.h.zoomWindow(this.a, p);
     this.h.done();
   }
+  /** Invio chiude lo zoom senza toccare la selezione: dietro può esserci un comando in attesa. */
+  enter() { this.h.done(); }
   preview(p: Vec): NewEnt[] {
     if (!this.a) return [];
     const a = this.a;
@@ -120,6 +156,7 @@ export class PanTool extends Tool {
   readonly name = 'PAN';
   readonly panMode = true;
   start() { this.ask('Trascinare con il mouse. Esc o Invio per finire', [], undefined, 'none'); }
+  enter() { this.h.done(); }
 }
 
 export class PasteTool extends Tool {

@@ -1,8 +1,10 @@
 // Comandi e alias, come in DraftSight/AutoCAD (nomi inglesi e italiani).
 import type { Host, Tool } from '../tools/base';
 import { LineTool, PolylineTool, RectTool, CircleTool, ArcTool, EllipseTool, SplineTool, TextTool, HatchTool } from '../tools/draw';
-import { BlockTool, InsertTool } from '../tools/blocks';
-import { WallTool, DoorTool, WindowTool, RoomTool, DimTool, DimContinueTool, DimRadiusTool, DimAngularTool } from '../tools/plan';
+import { BlockTool, InsertTool, BlockEditTool, BlockCloseTool, BlockRenameTool } from '../tools/blocks';
+import { ImageTool } from '../tools/extra';
+import { PolygonTool, PointTool, BreakTool, LengthenTool, DivideTool, PeditTool, LayerCurrentTool, LayerIsolateTool, LayerOffTool, LayerDeleteTool } from '../tools/extra';
+import { WallTool, DoorTool, WindowTool, RoomTool, DimTool, DimContinueTool, DimRadiusTool, DimAngularTool, DimBaselineTool, LeaderTool } from '../tools/plan';
 import {
   EraseTool, MoveTool, CopyTool, RotateTool, MirrorTool, ScaleTool, OffsetTool, TrimTool, ExtendTool, FilletTool,
   ChamferTool, ArrayTool,
@@ -29,11 +31,19 @@ export const COMMANDS: CmdDef[] = [
   { name: 'ARC', aliases: ['A', 'ARCO'], label: 'Arco', group: 'Disegno', make: h => new ArcTool(h) },
   { name: 'ELLIPSE', aliases: ['EL', 'ELLISSE'], label: 'Ellisse', group: 'Disegno', make: h => new EllipseTool(h) },
   { name: 'SPLINE', aliases: ['SPL'], label: 'Spline', group: 'Disegno', make: h => new SplineTool(h) },
+  { name: 'POLYGON', aliases: ['POL', 'POLIGONO'], label: 'Poligono regolare', group: 'Disegno', make: h => new PolygonTool(h) },
+  { name: 'POINT', aliases: ['PUNTO'], label: 'Punto', group: 'Disegno', make: h => new PointTool(h) },
+  { name: 'IMAGE', aliases: ['IMG', 'IMMAGINE', 'LOGO', 'JPG', 'IMAGEATTACH'], label: 'Inserisci immagine (JPG, PNG)', group: 'Disegno', make: h => new ImageTool(h) },
   { name: 'TEXT', aliases: ['T', 'DT', 'MT', 'MTEXT', 'NOTE', 'TESTO'], label: 'Testo', group: 'Disegno', make: h => new TextTool(h) },
   { name: 'HATCH', aliases: ['H', 'BH', 'BHATCH', 'TRATTEGGIO'], label: 'Tratteggio', group: 'Disegno', make: h => new HatchTool(h) },
 
   { name: 'BLOCK', aliases: ['B', 'BLOCCO', 'CREABLOCCO', 'MAKEBLOCK'], label: 'Crea blocco dalla selezione', group: 'Disegno', make: h => new BlockTool(h) },
   { name: 'INSERT', aliases: ['I', 'INSERISCI', 'INSERTBLOCK'], label: 'Inserisci blocco', group: 'Disegno', make: h => new InsertTool(h) },
+
+  { name: 'BEDIT', aliases: ['BE', 'MODBLOCCO', 'MODIFICABLOCCO'], label: 'Modifica un blocco sul posto', group: 'Disegno', make: h => new BlockEditTool(h) },
+  { name: 'BCLOSE', aliases: ['BC', 'CHIUDIBLOCCO'], label: 'Chiudi la modifica del blocco', group: 'Disegno', make: h => new BlockCloseTool(h) },
+  { name: 'BRENAME', aliases: ['RINOMINABLOCCO'], label: 'Rinomina un blocco', group: 'Disegno', make: h => new BlockRenameTool(h) },
+  { name: 'PURGE', aliases: ['PU', 'ELIMINABLOCCHI'], label: 'Elimina i blocchi non usati', group: 'Disegno', action: 'purge' },
 
   { name: 'WALL', aliases: ['MURO', 'MU'], label: 'Muro', group: 'Planimetria', make: h => new WallTool(h) },
   { name: 'DOOR', aliases: ['PORTA', 'PO'], label: 'Porta', group: 'Planimetria', make: h => new DoorTool(h) },
@@ -43,6 +53,8 @@ export const COMMANDS: CmdDef[] = [
   { name: 'DIMLINEAR', aliases: ['DLI', 'DIMLIN', 'QL', 'QUOTA'], label: 'Quota lineare', group: 'Quote', make: h => new DimTool(h, false) },
   { name: 'DIMALIGNED', aliases: ['DAL', 'DIMALI', 'QA'], label: 'Quota allineata', group: 'Quote', make: h => new DimTool(h, true) },
   { name: 'DIMCONTINUE', aliases: ['DCO', 'DIMCONT', 'QC'], label: 'Quota continua', group: 'Quote', make: h => new DimContinueTool(h) },
+  { name: 'DIMBASELINE', aliases: ['DBA', 'DIMBASE', 'QB'], label: 'Quota dalla linea di base', group: 'Quote', make: h => new DimBaselineTool(h) },
+  { name: 'LEADER', aliases: ['LE', 'LEAD', 'DIRETTRICE'], label: 'Direttrice con testo', group: 'Quote', make: h => new LeaderTool(h) },
   { name: 'DIMRADIUS', aliases: ['DRA', 'DIMRAD', 'QR'], label: 'Quota raggio', group: 'Quote', make: h => new DimRadiusTool(h, false) },
   { name: 'DIMDIAMETER', aliases: ['DDI', 'DIMDIA', 'QD'], label: 'Quota diametro', group: 'Quote', make: h => new DimRadiusTool(h, true) },
   { name: 'DIMANGULAR', aliases: ['DAN', 'DIMANG', 'QANG'], label: 'Quota angolare', group: 'Quote', make: h => new DimAngularTool(h) },
@@ -59,10 +71,15 @@ export const COMMANDS: CmdDef[] = [
   { name: 'FILLET', aliases: ['F', 'RACCORDA', 'RACCORDO'], label: 'Raccorda', group: 'Modifica', make: h => new FilletTool(h) },
   { name: 'CHAMFER', aliases: ['CHA', 'SMUSSO', 'SMUSSA'], label: 'Smusso', group: 'Modifica', make: h => new ChamferTool(h) },
   { name: 'ARRAY', aliases: ['AR', 'PATTERN', 'SERIE'], label: 'Serie (rettangolare o polare)', group: 'Modifica', make: h => new ArrayTool(h) },
+  { name: 'BREAK', aliases: ['BR', 'SPEZZA'], label: 'Spezza', group: 'Modifica', make: h => new BreakTool(h) },
+  { name: 'LENGTHEN', aliases: ['LEN', 'ALLUNGA'], label: 'Allunga o accorcia', group: 'Modifica', make: h => new LengthenTool(h) },
+  { name: 'DIVIDE', aliases: ['DIV', 'DIVIDI'], label: 'Dividi in parti uguali (mette dei punti)', group: 'Modifica', make: h => new DivideTool(h, false) },
+  { name: 'MEASURE', aliases: ['ME', 'MISURA'], label: 'Misura a tratti uguali (mette dei punti)', group: 'Modifica', make: h => new DivideTool(h, true) },
+  { name: 'PEDIT', aliases: ['PE', 'EDITPL', 'EDITPOLYLINE'], label: 'Modifica polilinea (vertici, apri e chiudi)', group: 'Modifica', make: h => new PeditTool(h) },
   { name: 'STRETCH', aliases: ['S', 'STIRA'], label: 'Stira', group: 'Modifica', make: h => new StretchTool(h) },
   { name: 'EXPLODE', aliases: ['X', 'ESPLODI'], label: 'Esplodi', group: 'Modifica', make: h => new ExplodeTool(h) },
   { name: 'JOIN', aliases: ['J', 'UNISCI'], label: 'Unisci', group: 'Modifica', make: h => new JoinTool(h) },
-  { name: 'MATCHPROP', aliases: ['MA', 'PAINTER', 'CORRISPONDENZA', 'COPIAPROPRIETA', 'PENNELLO'], label: 'Copia proprietà (pennello)', group: 'Modifica', make: h => new MatchPropTool(h) },
+  { name: 'MATCHPROP', aliases: ['MA', 'PAINTER', 'CORRISPONDENZA', 'COPIAPROPRIETA', 'COPIAPROP', 'PENNELLO'], label: 'Copia proprietà (pennello); opzione Impostazioni per scegliere quali', group: 'Modifica', make: h => new MatchPropTool(h) },
   { name: 'PASTECLIP', aliases: ['INCOLLA'], label: 'Incolla', group: 'Modifica', make: h => new PasteTool(h), keys: 'Ctrl+V' },
   { name: 'COPYCLIP', aliases: ['COPIAAPPUNTI'], label: 'Copia negli appunti', group: 'Modifica', action: 'copyclip', keys: 'Ctrl+C' },
   { name: 'CUTCLIP', aliases: ['TAGLIAAPPUNTI'], label: 'Taglia negli appunti', group: 'Modifica', action: 'cutclip', keys: 'Ctrl+X' },
@@ -89,6 +106,12 @@ export const COMMANDS: CmdDef[] = [
   { name: 'PRINT', aliases: ['PLOT', 'STAMPA'], label: 'Stampa', group: 'File', action: 'print', keys: 'Ctrl+P' },
 
   { name: 'LAYER', aliases: ['LA'], label: 'Layer', group: 'Impostazioni', action: 'layer' },
+  { name: 'LAYMCUR', aliases: ['LAYERCORRENTE', 'LC'], label: 'Rendi corrente il layer di un oggetto', group: 'Impostazioni', make: h => new LayerCurrentTool(h) },
+  { name: 'LAYISO', aliases: ['ISOLA', 'ISOLALAYER'], label: 'Isola i layer degli oggetti selezionati', group: 'Impostazioni', make: h => new LayerIsolateTool(h) },
+  { name: 'LAYUNISO', aliases: ['ANNULLAISOLA'], label: 'Ripristina i layer dopo ISOLA', group: 'Impostazioni', action: 'layunisolate' },
+  { name: 'LAYOFF', aliases: ['SPEGNILAYER'], label: 'Spegni il layer di un oggetto', group: 'Impostazioni', make: h => new LayerOffTool(h) },
+  { name: 'LAYON', aliases: ['ACCENDILAYER'], label: 'Accendi tutti i layer', group: 'Impostazioni', action: 'layallon' },
+  { name: 'LAYDEL', aliases: ['ELIMINALAYER'], label: 'Elimina un layer', group: 'Impostazioni', make: h => new LayerDeleteTool(h) },
   { name: 'PROPERTIES', aliases: ['PR', 'PROPS', 'CH', 'PROPRIETA'], label: 'Proprietà', group: 'Impostazioni', action: 'properties', keys: 'Ctrl+1' },
   { name: 'SETTINGS', aliases: ['DS', 'OS', 'OSNAP', 'DSETTINGS', 'UNITS', 'UN', 'IMPOSTAZIONI', 'OPZIONI'], label: 'Impostazioni (snap, unità, valori)', group: 'Impostazioni', action: 'settings' },
   { name: 'HELP', aliases: ['?', 'AIUTO', 'COMANDI'], label: 'Elenco comandi', group: 'Impostazioni', action: 'help', keys: 'F1' },

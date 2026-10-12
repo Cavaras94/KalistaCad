@@ -92,7 +92,8 @@ await kb.press('Escape');
 const door = (await ents()).find(e => e.t === 'door');
 check('porta inserita', !!door);
 if (door) {
-  check('porta a 100 dallo spigolo destro', Math.abs(door.p.x - (500 - 100 - 40)) < 1e-6 && Math.abs(door.p.y) < 1e-6, JSON.stringify(door.p));
+  // 100 dallo spigolo interno della stanza: l'asse del muro arriva mezzo spessore (15) più in là
+  check('porta a 100 dallo spigolo interno destro', Math.abs(door.p.x - (500 - 15 - 100 - 40)) < 1e-6 && Math.abs(door.p.y) < 1e-6, JSON.stringify(door.p));
   check('porta apre verso l\'interno', door.sw === 1, `sw=${door.sw}`);
 }
 
@@ -562,6 +563,247 @@ check('Canc cancella la selezione anche con il cursore nella riga di comando', !
 await clickWorld(8314.14, 14.14);
 await cmd('MI'); await cmd('8400,0'); await cmd('8400,100'); await cmd('si');
 check('"si" senza accento vale come Sì', (await lastEnt()).t === 'circle' && Math.abs((await lastEnt()).c.x - 8500) < 1e-6 && (await prompt()) === 'Comando:', await prompt());
+await page.evaluate(() => window.app.zoomExtents());
+await page.waitForTimeout(50);
+
+// ==================================================================== versione 0.3
+const zoomTo = async (x0, y0, x1, y1) => { await page.evaluate(b => window.app.zoomWindow({ x: b[0], y: b[1] }, { x: b[2], y: b[3] }), [x0, y0, x1, y1]); await page.waitForTimeout(50); };
+const history = () => page.textContent('#history');
+const docState = () => page.evaluate(() => ({ editing: window.app.doc.editing?.name ?? null, blocks: Object.fromEntries(Object.entries(window.app.doc.blocks).map(([k, d]) => [k, d.ents.length])), layers: window.app.doc.layers.map(l => [l.name, l.visible]) }));
+await kb.press('Escape');
+await zoomTo(8900, -100, 10100, 700);
+
+// ---- poligono, rettangolo con dimensioni, linea dall'ultimo punto
+await cmd('POL'); await cmd('6'); await cmd('9100,100'); await cmd('I'); await cmd('9150,100');
+const pol = await lastEnt();
+check('POLIGONO di 6 lati inscritto', pol.t === 'poly' && pol.closed && pol.pts.length === 6 && pol.pts[0].x === 9150 && pol.pts.every(p => Math.abs(Math.hypot(p.x - 9100, p.y - 100) - 50) < 1e-6) && (await prompt()) === 'Comando:', JSON.stringify(pol.pts[1]));
+await cmd('REC'); await cmd('9300,0'); await cmd('D'); await cmd('200'); await cmd('100'); await cmd('9250,-50');
+const recD = await lastEnt();
+check('RETTANGOLO con Dimensioni, dalla parte indicata', recD.t === 'poly' && recD.pts.some(p => p.x === 9100 && p.y === -100) && recD.pts.some(p => p.x === 9300 && p.y === 0), JSON.stringify(recD.pts));
+await cmd('L'); await cmd('9000,300'); await cmd('9100,300'); await cmd('');
+await cmd('L'); await cmd(''); await cmd('9100,400'); await cmd('');
+const cont = await lastEnt();
+check('LINEA: Invio al primo punto riparte dall\'ultimo punto', cont.t === 'line' && cont.a.x === 9100 && cont.a.y === 300 && cont.b.y === 400, JSON.stringify(cont));
+
+// ---- spezza, allunga, dividi
+await cmd('L'); await cmd('9000,500'); await cmd('9400,500'); await cmd('');
+const nBeforeBr = (await ents()).length;
+await cmd('BR'); await clickWorld(9100, 500); await cmd('9300,500');
+// il primo punto è quello del clic, preciso al pixel: si confronta con un po' di tolleranza
+const brLines = (await ents()).filter(e => e.t === 'line' && e.a.y === 500 && e.b.y === 500 && e.a.x >= 9000).map(e => [e.a.x, e.b.x]).sort((p, q) => p[0] - q[0]);
+check('SPEZZA toglie il tratto fra i due punti', (await ents()).length === nBeforeBr + 1 && brLines.length === 2 && brLines[0][0] === 9000 && Math.abs(brLines[0][1] - 9100) < 2 && brLines[1][0] === 9300 && brLines[1][1] === 9400 && (await prompt()) === 'Comando:', JSON.stringify(brLines));
+await cmd('LEN'); await cmd('D'); await cmd('50'); await clickWorld(9390, 500); await cmd('');
+check('ALLUNGA di 50 dalla parte del clic', (await ents()).some(e => e.t === 'line' && e.a.x === 9300 && e.b.x === 9450) && (await prompt()) === 'Comando:');
+await cmd('L'); await cmd('9000,600'); await cmd('9400,600'); await cmd('');
+const nPts = await count('point');
+await cmd('DIV'); await clickWorld(9250, 600); await cmd('4');
+const divPts = (await ents()).filter(e => e.t === 'point').map(e => e.p.x).sort();
+check('DIVIDI in 4 mette 3 punti', (await count('point')) === nPts + 3 && divPts.join() === '9100,9200,9300', divPts.join());
+
+// ---- modifica polilinea
+await cmd('PL'); await cmd('9600,0'); await cmd('9800,0'); await cmd('9800,200'); await cmd('');
+const pe0 = await lastEnt();
+await cmd('PE'); await clickWorld(9650, 0); await cmd('A'); await cmd('9700,0'); await cmd(''); await cmd('C'); await cmd('');
+const pe1 = await byId(pe0.id);
+check('EDITPL: aggiunge un vertice e chiude', pe1.pts.length === 4 && pe1.pts[1].x === 9700 && pe1.closed === true && (await prompt()) === 'Comando:', JSON.stringify(pe1));
+await cmd('PE'); await clickWorld(9650, 0); await cmd('R'); await cmd('9700,0'); await cmd(''); await cmd('');
+check('EDITPL: toglie un vertice', (await byId(pe0.id)).pts.length === 3);
+
+// ---- quota dalla linea di base, direttrice
+await cmd('DLI'); await cmd('9600,400'); await cmd('9700,400'); await cmd('9650,450');
+await cmd('DBA'); await cmd('9900,400'); await cmd('');
+const dba = await lastEnt();
+check('QUOTA dalla linea di base: stessa origine, linea più lontana', dba.t === 'dim' && dba.a.x === 9600 && dba.b.x === 9900 && Math.abs(dba.p.y - 487.5) < 1e-6, JSON.stringify(dba));
+await cmd('LE'); await cmd('9600,600'); await cmd('9700,650'); await cmd('9800,650'); await cmd(''); await cmd('pilastro 30x30');
+const lead = await lastEnt();
+check('DIRETTRICE con testo', lead.t === 'leader' && lead.pts.length === 3 && lead.s === 'pilastro 30x30' && lead.layer === 'QUOTE' && (await prompt()) === 'Comando:', JSON.stringify(lead));
+
+// ---- snap digitato
+await cmd('L'); await cmd('MED'); await clickWorld(9062, 303); await cmd('9060,350'); await cmd('');
+const medLine = await lastEnt();
+check('snap digitato MED: prende il punto medio', medLine.t === 'line' && medLine.a.x === 9050 && medLine.a.y === 300, JSON.stringify(medLine));
+await cmd('L'); await cmd('CEN'); await clickWorld(9062, 303);
+check('snap digitato che lì non c\'è (una linea non ha un centro): il punto non viene preso', (await history()).includes('non c\'è il punto di snap') && (await prompt()).startsWith('LINEA: Specificare punto iniziale'), await prompt());
+await kb.press('Escape');
+
+// ---- zoom dentro un comando
+await cmd('L'); await cmd('9500,300'); await cmd('Z');
+check('Z durante LINEA apre lo zoom senza annullare', (await prompt()).startsWith('ZOOM'), await prompt());
+await cmd('E');
+check('finito lo zoom si torna a LINEA', (await prompt()).startsWith('LINEA: Specificare punto successivo'), await prompt());
+await cmd('@100,0'); await cmd('');
+const zl = await lastEnt();
+check('la linea continua dal suo punto, anche dopo lo zoom', zl.a.x === 9500 && zl.a.y === 300 && zl.b.x === 9600 && zl.b.y === 300, JSON.stringify(zl));
+await zoomTo(8900, -100, 10200, 700);
+
+// ---- TAGLIA con linea di intercettazione, parole chiave di selezione
+await cmd('L'); await cmd('10000,-50'); await cmd('10000,150'); await cmd('');
+await cmd('L'); await cmd('9900,0'); await cmd('10100,0'); await cmd('');
+await cmd('L'); await cmd('9900,100'); await cmd('10100,100'); await cmd('');
+await cmd('TR'); await cmd('');
+await clickWorld(10050, -30);
+check('TAGLIA: un clic a vuoto apre la linea di intercettazione', (await prompt()).includes('intercettazione'), await prompt());
+await clickWorld(10050, 130);
+await cmd('');
+const cutLines = (await ents()).filter(e => e.t === 'line' && e.a.y === e.b.y && (e.a.y === 0 || e.a.y === 100) && Math.min(e.a.x, e.b.x) === 9900).map(e => Math.max(e.a.x, e.b.x));
+check('la linea di intercettazione taglia tutte e due le linee', cutLines.length === 2 && cutLines.every(x => x === 10000) && (await prompt()) === 'Comando:', JSON.stringify(cutLines));
+await cmd('M'); await cmd('U');
+const selU = await page.evaluate(() => [...window.app.selection]);
+await cmd('TUTTO');
+const selAll = await page.evaluate(() => window.app.selection.size);
+check('alla richiesta di selezione: U prende l\'ultima, TUTTO tutte', selU.length === 1 && selAll > 50, `${selU.length} poi ${selAll}`);
+await kb.press('Escape');
+
+// ---- la porta segue il muro
+await zoomTo(8900, -620, 9700, -280);
+await cmd('MURO'); await cmd('9000,-400'); await cmd('9500,-400'); await cmd('');
+await cmd('PORTA'); await clickWorld(9200, -400); await clickWorld(9200, -360);
+await kb.press('Escape'); // PORTA resta attivo per metterne altre
+const door0 = (await ents()).filter(e => e.t === 'door').at(-1);
+await clickWorld(9450, -400);
+await cmd('M'); await cmd('0,0'); await cmd('@0,-100');
+const door1 = await byId(door0.id);
+check('spostando il muro la porta lo segue', !!door1 && Math.abs(door1.p.y - (door0.p.y - 100)) < 1e-6 && Math.abs(door1.p.x - door0.p.x) < 1e-6, `${JSON.stringify(door0.p)} → ${JSON.stringify(door1?.p)}`);
+await clickWorld(9450, -500);
+await cmd('ISOLA');
+const iso = (await docState()).layers.filter(l => l[1]).map(l => l[0]);
+await cmd('ANNULLAISOLA');
+check('ISOLA lascia solo il layer scelto, ANNULLAISOLA ripristina anche il layer corrente', iso.join() === 'MURI' && (await docState()).layers.every(l => l[1]) && (await page.evaluate(() => window.app.doc.current)) === '0', iso.join());
+await clickWorld(9450, -500);
+await kb.press('Delete');
+check('cancellando il muro sparisce anche la porta', !(await byId(door0.id)));
+
+// ---- avviso sui layer nascosti
+await page.evaluate(() => { const d = window.app.doc; d.edit('prova', () => { d.layer('0').visible = false; }); });
+await cmd('L'); await cmd('9000,-700'); await cmd('9100,-700'); await cmd('');
+check('disegnare su un layer nascosto avvisa', (await history()).includes('che è nascosto'));
+await cmd('ACCENDILAYER');
+check('ACCENDILAYER riaccende tutto', (await docState()).layers.every(l => l[1]));
+
+// ---- modifica di un blocco sul posto
+await zoomTo(8900, -900, 9900, -500);
+await cmd('C'); await cmd('9300,-700'); await cmd('20');
+await clickWorld(9314.14, -685.86);
+await cmd('B'); await cmd('tavolino'); await cmd('9300,-700');
+const nMain = (await ents()).length;
+await cmd('BE');
+const inEdit = await docState();
+check('MODBLOCCO apre il contenuto del blocco', inEdit.editing === 'tavolino' && (await ents()).length === 1 && (await page.textContent('#st-info')).includes('MODIFICA DEL BLOCCO'), JSON.stringify(inEdit.editing));
+await cmd('L'); await cmd('0,0'); await cmd('30,0'); await cmd('');
+await cmd('BC'); await cmd('S');
+const afterEdit = await docState();
+check('CHIUDIBLOCCO salva e torna al disegno', afterEdit.editing === null && afterEdit.blocks.tavolino === 2 && (await ents()).length === nMain && (await prompt()) === 'Comando:', JSON.stringify(afterEdit.blocks));
+await kb.press('Control+z');
+check('annulla riporta il blocco a com\'era', (await docState()).blocks.tavolino === 1);
+await kb.press('Control+y');
+
+// ---- arco di ellisse, eliminazione di un layer
+await cmd('EL'); await cmd('A'); await cmd('9600,-700'); await cmd('9800,-700'); await cmd('50'); await cmd('9800,-700'); await cmd('9700,-600');
+const elArc = await lastEnt();
+check('ELLISSE Arco: un quarto di ellisse', elArc.t === 'ellipse' && Math.abs(elArc.a0) < 1e-9 && Math.abs(elArc.a1 - Math.PI / 2) < 1e-9 && Math.abs(elArc.k - 0.5) < 1e-9 && (await prompt()) === 'Comando:', JSON.stringify(elArc));
+await cmd('LAYDEL'); await cmd('ARREDI');
+if ((await prompt()) !== 'Comando:') await cmd('S');
+check('ELIMINALAYER toglie il layer', !(await docState()).layers.some(l => l[0] === 'ARREDI') && (await prompt()) === 'Comando:');
+await page.screenshot({ path: join(OUT, 'v03.png') });
+await page.evaluate(() => window.app.zoomExtents());
+await page.waitForTimeout(50);
+
+// ==================================================================== richieste della mail
+await zoomTo(10900, -100, 11900, 700);
+// ---- RACCORDA sullo spigolo di un rettangolo, e su tutta la polilinea
+await cmd('REC'); await cmd('11000,0'); await cmd('@200,100');
+const fr = await lastEnt();
+await cmd('F'); await cmd('R'); await cmd('20');
+await clickWorld(11100, 0); await clickWorld(11200, 50);
+const fr1 = await byId(fr.id);
+check('RACCORDA lo spigolo di un rettangolo', fr1.pts.length === 5 && Math.abs(fr1.pts[1].x - 11180) < 1e-6 && Math.abs(fr1.pts[2].y - 20) < 1e-6 && Math.abs(fr1.bulges[1] - Math.tan(Math.PI / 8)) < 1e-9 && (await prompt()) === 'Comando:', JSON.stringify(fr1.pts));
+await cmd('REC'); await cmd('11300,0'); await cmd('@200,100');
+const fr2 = await lastEnt();
+await cmd('F'); await cmd('P'); await clickWorld(11400, 0);
+check('RACCORDA Polilinea intera: quattro spigoli', (await byId(fr2.id)).pts.length === 8 && (await history()).includes('4 spigoli raccordati') && (await prompt()) === 'Comando:');
+await cmd('REC'); await cmd('11600,0'); await cmd('@200,100');
+const ch3 = await lastEnt();
+await cmd('CHA'); await cmd('D'); await cmd('30'); await cmd('10');
+await clickWorld(11700, 0); await clickWorld(11800, 50);
+const ch3b = await byId(ch3.id);
+check('SMUSSO lo spigolo di un rettangolo', ch3b.pts.length === 5 && Math.abs(ch3b.pts[1].x - 11770) < 1e-6 && Math.abs(ch3b.pts[2].y - 10) < 1e-6 && !ch3b.bulges, JSON.stringify(ch3b.pts));
+
+// ---- retini: scelta e passo
+await cmd('REC'); await cmd('11000,200'); await cmd('@200,150');
+await cmd('H'); await cmd('P'); await cmd('M'); await cmd('PA'); await cmd('25');
+check('TRATTEGGIO: retino Mattoni con passo 25 nel prompt', (await prompt()).includes('Mattoni') && (await prompt()).includes('passo 25'), await prompt());
+await clickWorld(11100, 275);
+await kb.press('Escape');
+const hb = await lastEnt();
+check('TRATTEGGIO a mattoni creato', hb.t === 'hatch' && hb.pat === 'brick' && hb.sp === 25, JSON.stringify({ pat: hb.pat, sp: hb.sp }));
+await clickWorld(11110, 275); // su un corso del retino, lontano dal contorno
+const hPanel = await page.evaluate(() => [...document.querySelectorAll('#props .prop')].map(p => p.querySelector('span')?.textContent).join('|'));
+check('pannello del tratteggio: retino, passo e angolo', /Pattern/.test(hPanel) && /Passo/.test(hPanel) && /Angolo/.test(hPanel) && (await page.evaluate(() => document.querySelectorAll('#props select option[value="brick"]').length)) === 1, hPanel);
+await kb.press('Escape');
+
+// ---- AREA con un clic dentro
+await cmd('L'); await cmd('11300,200'); await cmd('11500,200'); await cmd('11500,300'); await cmd('11300,300'); await cmd('C');
+await cmd('AA'); await cmd('I'); await clickWorld(11400, 250);
+check('AREA Interno: 200 × 100 dentro quattro linee', /Area = 20000 cm² \(2 m²\);\s+Perimetro = 600/.test(await history()) && (await prompt()) === 'Comando:', (await history()).slice(-120));
+
+// ---- Copia proprietà con Impostazioni
+await cmd('L'); await cmd('11600,200'); await cmd('11800,200'); await cmd('');
+const mpA = await lastEnt();
+await cmd('L'); await cmd('11600,300'); await cmd('11800,300'); await cmd('');
+const mpB = await lastEnt();
+await page.evaluate(id => { const d = window.app.doc; d.edit('prova', () => d.replace([{ ...d.byId(id), layer: 'TESTI', color: '#ff0000', lt: 'dashed' }])); }, mpA.id);
+await cmd('MA'); await cmd('I');
+await page.waitForSelector('.modal input[type=checkbox]');
+const nChecks = await page.evaluate(() => document.querySelectorAll('.modal input[type=checkbox]').length);
+await page.evaluate(() => { document.querySelectorAll('.modal input[type=checkbox]')[0].click(); });
+await page.click('.modal button.primary');
+await page.waitForTimeout(80);
+await clickWorld(11700, 200); await clickWorld(11700, 300); await cmd('');
+const mpB2 = await byId(mpB.id);
+check('COPIA PROPRIETÀ con Impostazioni: senza il layer, il resto sì', nChecks === 6 && mpB2.layer === '0' && mpB2.color === '#ff0000' && mpB2.lt === 'dashed', JSON.stringify(mpB2));
+await page.evaluate(() => { /* per i passi dopo: di nuovo tutte le proprietà */ });
+await cmd('MA'); await cmd('I');
+await page.waitForSelector('.modal input[type=checkbox]');
+await page.evaluate(() => { document.querySelectorAll('.modal input[type=checkbox]')[0].click(); });
+await page.click('.modal button.primary');
+await page.waitForTimeout(80);
+await kb.press('Escape');
+
+// ---- immagine
+const pngPath = join(OUT, 'logo.png');
+// un'immagine vera, 40 × 20, arancione con una fascia blu: la disegna il browser stesso
+const pngData = await page.evaluate(() => {
+  const c = document.createElement('canvas');
+  c.width = 40; c.height = 20;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ff8800'; g.fillRect(0, 0, 40, 20);
+  g.fillStyle = '#2060ff'; g.fillRect(0, 0, 40, 6);
+  return c.toDataURL('image/png').split(',')[1];
+});
+writeFileSync(pngPath, Buffer.from(pngData, 'base64'));
+const imgChooser = page.waitForEvent('filechooser');
+await cmd('IMMAGINE');
+await (await imgChooser).setFiles(pngPath);
+await page.waitForFunction(() => document.getElementById('prompt').textContent.includes('punto di inserimento'), null, { timeout: 10000 });
+await cmd('11000,450'); await cmd('11200,450');
+const img = await lastEnt();
+check('IMMAGINE: inserita con le sue proporzioni (2 a 1)', img.t === 'image' && img.p.x === 11000 && img.w === 200 && Math.abs(img.h - 100) < 1e-6 && img.src.startsWith('data:image/png') && (await prompt()) === 'Comando:', JSON.stringify({ ...img, src: img.src.slice(0, 20) }));
+await page.waitForTimeout(300);
+// il colore al centro dell'immagine sullo schermo deve essere il suo arancione, e in alto la fascia blu
+const pix = await page.evaluate(() => {
+  const cv = document.getElementById('base');
+  const k = cv.width / cv.getBoundingClientRect().width;
+  const at = (x, y) => { const p = window.app.view.toScreen({ x, y }); return [...cv.getContext('2d').getImageData(Math.round(p.x * k), Math.round(p.y * k), 1, 1).data].slice(0, 3).join(); };
+  return [at(11100, 480), at(11100, 540)];
+});
+check('l\'immagine si vede sul disegno, dritta', pix[0] === '255,136,0' && pix[1] === '32,96,255', pix.join(' | '));
+await page.screenshot({ path: join(OUT, 'mail.png') });
+await kb.press('Control+p');
+await page.waitForSelector('.print-preview svg');
+await page.selectOption('.print-form select >> nth=2', '0'); // adatta al foglio: a 1:100 il disegno di prova non ci sta
+await page.waitForTimeout(150);
+check('la stampa contiene l\'immagine', (await page.evaluate(() => document.querySelectorAll('.print-preview svg image').length)) >= 1);
+await kb.press('Escape');
 await page.evaluate(() => window.app.zoomExtents());
 await page.waitForTimeout(50);
 

@@ -1,6 +1,6 @@
 // Blocchi: gruppi di entità con un nome, definiti una volta e inseriti quante volte serve.
 import type { Ent, NewEnt, Blocks } from '../model/entities';
-import { transform } from '../model/entities';
+import { transform, blockUses } from '../model/entities';
 import { Vec, translate } from '../model/geom';
 import { Tool, SelTool, O, parseNum, parseAngle, fmtLen } from './base';
 
@@ -10,10 +10,7 @@ export function findBlockName(blocks: Blocks, s: string): string | undefined {
   return Object.keys(blocks).find(n => n.toLowerCase() === k);
 }
 
-/** Vero se fra le entità c'è, anche annidato, un inserimento del blocco name. */
-export function usesBlock(ents: readonly Ent[], name: string, blocks: Blocks, depth = 0): boolean {
-  return ents.some(e => e.t === 'insert' && (e.name === name || (depth < 8 && usesBlock(blocks[e.name]?.ents ?? [], name, blocks, depth + 1))));
-}
+export const usesBlock = blockUses;
 
 // ---------------------------------------------------------------- BLOCCO
 
@@ -82,6 +79,113 @@ export class BlockTool extends SelTool {
   }
 
   private finish() { this.h.setSelection([]); this.h.done(); }
+}
+
+// ---------------------------------------------------------------- MODBLOCCO / CHIUDIBLOCCO
+
+/** Apre un blocco per modificarlo sul posto: il disegno mostra solo il suo contenuto fino a CHIUDIBLOCCO. */
+export class BlockEditTool extends Tool {
+  readonly name = 'MODBLOCCO';
+
+  start() {
+    const doc = this.h.doc;
+    if (doc.editing) { this.h.msg(`Si sta già modificando il blocco "${doc.editing.name}": prima CHIUDIBLOCCO.`); this.h.done(); return; }
+    const names = Object.keys(doc.blocks).sort();
+    if (!names.length) { this.h.msg('Nessun blocco in questo disegno.'); this.h.done(); return; }
+    const sel = doc.ents.filter(e => this.h.selection.has(e.id));
+    if (sel.length === 1 && sel[0].t === 'insert' && doc.blocks[sel[0].name]) { this.open(sel[0].name); return; }
+    this.ask('Nome del blocco da modificare (o selezionarne un inserimento prima del comando)', names.map(n => O(n, n)), names.length === 1 ? names[0] : undefined, 'text');
+  }
+
+  text(raw: string): boolean {
+    if (this.mode !== 'text') return false;
+    const s = raw.trim() || this.def || '';
+    if (!s) { this.h.done(); return true; }
+    const name = findBlockName(this.h.doc.blocks, s);
+    if (!name) { this.h.msg(`Blocco "${s}" non trovato.`); return true; }
+    this.open(name);
+    return true;
+  }
+
+  option(k: string) { if (this.mode === 'text') this.text(k); }
+
+  private open(name: string) {
+    this.h.setSelection([]);
+    this.h.doc.beginBlockEdit(name);
+    this.h.done();
+    this.h.zoomExtents();
+    this.h.msg(`Modifica del blocco "${name}": il disegno mostra solo il suo contenuto, con il punto base in 0,0. Per finire: CHIUDIBLOCCO.`);
+  }
+}
+
+export class BlockCloseTool extends Tool {
+  readonly name = 'CHIUDIBLOCCO';
+
+  start() {
+    if (!this.h.doc.editing) { this.h.msg('Nessun blocco in modifica.'); this.h.done(); return; }
+    this.ask(`Salvare le modifiche al blocco "${this.h.doc.editing.name}"?`, [O('S', 'Sì'), O('N', 'No')], 'S', 'none');
+  }
+
+  option(k: string) { this.close(k === 'S'); }
+  enter() { this.close(true); }
+
+  private close(save: boolean) {
+    const name = this.h.doc.editing?.name;
+    this.h.setSelection([]);
+    const dropped = this.h.doc.endBlockEdit(save);
+    this.h.done();
+    this.h.zoomExtents();
+    this.h.msg(save ? `Blocco "${name}" aggiornato: cambiano tutti i suoi inserimenti.` : `Modifiche al blocco "${name}" scartate.`);
+    if (save && dropped) this.h.msg(`Tolti ${dropped} inserimenti del blocco dentro se stesso: un blocco non può contenersi.`);
+  }
+}
+
+// ---------------------------------------------------------------- RINOMINABLOCCO / ELIMINABLOCCHI
+
+export class BlockRenameTool extends Tool {
+  readonly name = 'RINOMINABLOCCO';
+  private old = '';
+
+  start() {
+    const names = Object.keys(this.h.doc.blocks).sort();
+    if (!names.length) { this.h.msg('Nessun blocco in questo disegno.'); this.h.done(); return; }
+    this.ask('Nome del blocco da rinominare', names.map(n => O(n, n)), undefined, 'text');
+  }
+
+  text(raw: string): boolean {
+    if (this.mode !== 'text') return false;
+    const s = raw.trim();
+    if (!s) { this.h.done(); return true; }
+    const blocks = this.h.doc.blocks;
+    if (!this.old) {
+      const name = findBlockName(blocks, s);
+      if (!name) { this.h.msg(`Blocco "${s}" non trovato.`); return true; }
+      this.old = name;
+      this.ask(`Nuovo nome per "${name}"`, [], undefined, 'text');
+      return true;
+    }
+    const clash = findBlockName(blocks, s);
+    if (clash && clash !== this.old) { this.h.msg(`Esiste già un blocco "${clash}".`); return true; }
+    const old = this.old;
+    this.h.doc.edit('Rinomina blocco', () => this.h.doc.renameBlock(old, s));
+    if (this.h.doc.editing?.name === old) this.h.doc.editing.name = s;
+    this.h.msg(`Blocco "${old}" rinominato in "${s}".`);
+    this.h.done();
+    return true;
+  }
+
+  option(k: string) { if (this.mode === 'text' && !this.old) this.text(k); }
+}
+
+/** Toglie dal disegno le definizioni dei blocchi che nessun inserimento usa. */
+export function purgeBlocks(h: { doc: Tool['h']['doc']; msg(s: string): void }) {
+  const doc = h.doc;
+  const unused = doc.unusedBlocks();
+  if (!unused.length) { h.msg('Nessun blocco inutilizzato.'); return; }
+  doc.edit('Elimina blocchi inutilizzati', () => {
+    doc.blocks = Object.fromEntries(Object.entries(doc.blocks).filter(([k]) => !unused.includes(k)));
+  });
+  h.msg(`Eliminati ${unused.length} blocchi non usati: ${unused.join(', ')}.`);
 }
 
 // ---------------------------------------------------------------- INSERISCI

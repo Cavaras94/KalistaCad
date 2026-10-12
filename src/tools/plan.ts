@@ -165,8 +165,13 @@ abstract class OpeningTool extends Tool {
     if (!this.wall || n < 0) return false;
     const { u, L } = this.axis(this.wall);
     const fromA = dot(sub(this.pickPt!, this.wall.a), u) < L / 2;
-    this.s = this.clampS(fromA ? n + this.width / 2 : L - n - this.width / 2);
-    this.h.msg(`Vano a ${fmtLen(n)} dallo spigolo.`);
+    // La distanza si conta dallo spigolo che si vede dentro la stanza: dove il muro fa angolo con un
+    // altro, l'asse arriva mezzo spessore più in là della faccia interna.
+    const info = this.h.doc.ctx().walls?.walls.get(this.wall.id);
+    const joined = info ? !(fromA ? info.capS : info.capE) : false;
+    const off = joined ? this.wall.th / 2 : 0;
+    this.s = this.clampS(fromA ? n + off + this.width / 2 : L - n - off - this.width / 2);
+    this.h.msg(`Vano a ${fmtLen(n)} ${joined ? 'dallo spigolo interno' : 'dalla fine del muro'}.`);
     if (this.kind === 'window') this.place();
     return true;
   }
@@ -424,6 +429,102 @@ export class DimContinueTool extends Tool {
   preview(p: Vec): NewEnt[] {
     const e = this.make(p);
     return e ? [e] : [];
+  }
+}
+
+/** Quote dalla stessa origine, una sopra l'altra: ogni nuova linea di quota si allontana di un passo. */
+export class DimBaselineTool extends Tool {
+  readonly name = 'QUOTA LINEA DI BASE';
+  private prev: DimE | null = null;
+
+  start() {
+    const d = lastDimId !== null ? this.h.doc.byId(lastDimId) : undefined;
+    if (d && d.t === 'dim' && !d.k) this.useDim(d);
+    else this.ask('Selezionare la quota di base', [], undefined, 'entity');
+  }
+
+  private useDim(d: DimE) {
+    this.prev = d;
+    this.base = d.a;
+    this.ask('Specificare origine della linea di estensione successiva');
+  }
+
+  entity(e: Ent) {
+    if (e.t !== 'dim' || e.k) { this.h.msg('Selezionare una quota lineare.'); return; }
+    this.useDim(e);
+  }
+
+  private make(p: Vec): NewEnt | null {
+    const d = this.prev;
+    const g = d && dimGeometry(d);
+    if (!d || !g) return null;
+    const ang = d.ang ?? Math.atan2(g.u.y, g.u.x);
+    // la nuova linea di quota sta più lontana dai punti misurati, dalla stessa parte di quella di prima
+    const away = sub(g.a2, d.a);
+    const dir = dist(g.a2, d.a) > 1e-9 ? norm(away) : perp(g.u);
+    const step = (d.h ?? this.h.doc.settings.dimH) * 2.5;
+    const e: NewEnt = { t: 'dim', a: d.a, b: p, p: add(g.a2, mul(dir, step)), ang, layer: d.layer };
+    if (d.h !== undefined) e.h = d.h;
+    return e;
+  }
+
+  point(p: Vec) {
+    const e = this.make(p);
+    if (!e) return;
+    this.h.doc.edit('Quota linea di base', () => {
+      const added = this.h.doc.add(e) as DimE;
+      lastDimId = added.id;
+      this.useDim(added);
+    });
+  }
+
+  preview(p: Vec): NewEnt[] {
+    const e = this.make(p);
+    return e ? [e] : [];
+  }
+}
+
+/** Direttrice: freccia sul primo punto, spezzata, testo in fondo. */
+export class LeaderTool extends Tool {
+  readonly name = 'DIRETTRICE';
+  private pts: Vec[] = [];
+
+  start() { this.ask('Specificare la punta della freccia'); }
+
+  point(p: Vec) {
+    const n = this.pts.length;
+    if (n && dist(this.pts[n - 1], p) < 1e-9) return;
+    this.pts.push(p);
+    this.base = p;
+    this.ask(n ? 'Specificare punto successivo (Invio per scrivere il testo) o' : 'Specificare punto successivo o', [O('A', 'Annulla')]);
+  }
+
+  option(k: string) {
+    if (k !== 'A' || this.mode === 'text') return;
+    this.pts.pop();
+    const n = this.pts.length;
+    this.base = this.pts[n - 1] ?? null;
+    if (!n) this.start();
+    else this.ask(n > 1 ? 'Specificare punto successivo (Invio per scrivere il testo) o' : 'Specificare punto successivo o', [O('A', 'Annulla')]);
+  }
+
+  enter() {
+    if (this.pts.length < 2) { super.enter(); return; }
+    this.ask('Testo della direttrice', [], undefined, 'text');
+  }
+
+  text(raw: string): boolean {
+    if (this.mode !== 'text') return false;
+    const doc = this.h.doc;
+    const pts = this.pts;
+    doc.edit('Direttrice', () => { doc.ensureLayer('QUOTE'); doc.add({ t: 'leader', pts, s: raw.trim(), layer: 'QUOTE' }); });
+    this.h.done();
+    return true;
+  }
+
+  preview(p: Vec): NewEnt[] {
+    if (!this.pts.length || this.mode === 'text') return this.pts.length > 1 ? [{ t: 'leader', pts: this.pts, s: '', layer: 'QUOTE' }] : [];
+    return [{ t: 'leader', pts: [...this.pts, p], s: '', layer: 'QUOTE' }];
   }
 }
 

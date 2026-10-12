@@ -7,7 +7,7 @@ import {
   tessCurve, segHitsBox, boxInside, boxOverlap, pointInPolygon,
 } from '../model/geom';
 import { entPrims, entBoxCached } from './render';
-import { textCorners } from '../model/entities';
+import { textCorners, imageCorners } from '../model/entities';
 
 export interface SnapSettings {
   osnap: boolean;
@@ -16,6 +16,15 @@ export interface SnapSettings {
   ortho: boolean;
   polar: boolean;
   polarInc: number; // gradi
+  /** puntamento snap ad oggetto: allineamento orizzontale e verticale con i punti appena agganciati */
+  otrack: boolean;
+}
+
+export interface SnapExtra {
+  /** snap valido solo per il prossimo punto (digitato: FIN, MED…); 'none' = nessuno snap */
+  only?: SnapKind | 'none';
+  /** punti agganciati di recente, per il puntamento */
+  acquired?: Vec[];
 }
 
 export interface SnapResult {
@@ -23,6 +32,10 @@ export interface SnapResult {
   k?: SnapKind;
   /** linea di puntamento polare/orto da disegnare */
   track?: { from: Vec; ang: number };
+  /** punti con cui p è allineato in orizzontale o in verticale (puntamento snap ad oggetto) */
+  align?: Vec[];
+  /** era richiesto uno snap preciso (only) e lì vicino non ce n'è */
+  miss?: boolean;
 }
 
 export const SNAP_LABEL: Record<SnapKind, string> = {
@@ -40,7 +53,67 @@ function nearEnts(doc: Doc, p: Vec, tol: number): Ent[] {
   return doc.ents.filter(e => doc.layer(e.layer).visible && boxOverlap(entBoxCached(e, ctx), q));
 }
 
-export function findSnap(doc: Doc, world: Vec, tol: number, st: SnapSettings, base?: Vec, exclude?: Set<number>): SnapResult {
+/** Allinea p ai punti acquisiti: in orizzontale con uno, in verticale con un altro (o lo stesso). */
+function alignTo(p: Vec, acquired: Vec[], tol: number): { p: Vec; align: Vec[] } | null {
+  let x: number | undefined, y: number | undefined;
+  const align: Vec[] = [];
+  for (const a of acquired) {
+    if (dist(a, p) <= tol) continue;
+    if (y === undefined && Math.abs(p.y - a.y) <= tol) { y = a.y; align.push(a); }
+    else if (x === undefined && Math.abs(p.x - a.x) <= tol) { x = a.x; align.push(a); }
+  }
+  return align.length ? { p: v(x ?? p.x, y ?? p.y), align } : null;
+}
+
+/** Lungo una direzione di puntamento, il punto allineato in verticale o in orizzontale con un punto acquisito. */
+function alignOnTrack(r: SnapResult, acquired: Vec[], tol: number): SnapResult {
+  if (!r.track) return r;
+  const d = dirOf(r.track.ang);
+  for (const a of acquired) {
+    for (const axis of ['x', 'y'] as const) {
+      if (Math.abs(d[axis]) < 1e-6 || Math.abs(r.p[axis] - a[axis]) > tol) continue;
+      const L = (a[axis] - r.track.from[axis]) / d[axis];
+      const q = add(r.track.from, mul(d, L));
+      if (dist(q, a) > tol) return { ...r, p: q, align: [a] };
+    }
+  }
+  return r;
+}
+
+export function findSnap(doc: Doc, world: Vec, tol: number, st0: SnapSettings, base?: Vec, exclude?: Set<number>, extra: SnapExtra = {}): SnapResult {
+  const only = extra.only;
+  const st: SnapSettings = only === 'none' ? { ...st0, osnap: false } : only ? { ...st0, osnap: true, modes: new Set([only]) } : st0;
+  const acquired = st.otrack && !only ? extra.acquired ?? [] : [];
+  if (only && only !== 'none') return snapOnly(doc, world, tol, only, base, exclude) ?? { p: world, miss: true };
+  const r = snapCore(doc, world, tol, st, base, exclude);
+  if (r.k && r.k !== 'grid') return r;
+  if (!acquired.length) return r;
+  if (r.track) return alignOnTrack(r, acquired, tol);
+  const al = alignTo(r.p, acquired, tol);
+  return al ? { ...r, ...al } : r;
+}
+
+/**
+ * Snap chiesto per nome (MED, CEN, PER…): basta avere il cursore su un'entità, in un punto qualsiasi.
+ * Ne esce il punto di quel tipo, sull'entità sotto il cursore, più vicino al cursore.
+ */
+function snapOnly(doc: Doc, world: Vec, tol: number, only: SnapKind, base?: Vec, exclude?: Set<number>): SnapResult | null {
+  const ctx = doc.ctx();
+  const under = nearEnts(doc, world, tol).filter(e => !exclude?.has(e.id))
+    .map(e => ({ e, curves: primCurves(entPrims(e, ctx)) }))
+    .filter(x => x.curves.some(c => distToCurve(world, c) <= tol) || snapPoints(x.e, ctx).some(s => dist(s.p, world) <= tol));
+  let best: Vec | null = null, bd = Infinity;
+  const offer = (p: Vec) => { const d = dist(p, world); if (d < bd) { bd = d; best = p; } };
+  if (only === 'near' || only === 'perp' || only === 'int') {
+    const curves = under.flatMap(x => x.curves).slice(0, 400);
+    if (only === 'near') for (const c of curves) { if (distToCurve(world, c) <= tol) offer(closestOnCurve(world, c)); }
+    else if (only === 'perp') { if (base) for (const c of curves) { if (distToCurve(world, c) > tol) continue; const f = perpFoot(base, c); if (f) offer(f); } }
+    else for (let i = 0; i < curves.length; i++) for (let j = i + 1; j < curves.length; j++) for (const p of intersect(curves[i], curves[j])) offer(p);
+  } else for (const x of under) for (const s of snapPoints(x.e, ctx)) if (s.k === only) offer(s.p);
+  return best ? { p: best, k: only } : null;
+}
+
+function snapCore(doc: Doc, world: Vec, tol: number, st: SnapSettings, base?: Vec, exclude?: Set<number>): SnapResult {
   if (st.osnap && st.modes.size) {
     const ctx = doc.ctx();
     const cands = nearEnts(doc, world, tol).filter(e => !exclude?.has(e.id));
@@ -125,6 +198,10 @@ export function pickAt(doc: Doc, p: Vec, tol: number, filter?: (e: Ent) => boole
     let d = Infinity;
     for (const c of entCurves(doc, e)) d = Math.min(d, distToCurve(p, c));
     if (d > tol && (e.t === 'text' || e.t === 'room' || e.t === 'dim') && hitsText(e, doc, p)) d = tol * 0.9;
+    if (d > tol) {
+      // un'immagine si prende cliccandoci sopra, ma solo se lì non c'è altro di più preciso
+      for (const pr of entPrims(e, doc.ctx())) if (pr.k === 'img' && pointInPolygon(p, imageCorners(pr))) d = tol * 0.98;
+    }
     if (d > tol) {
       for (const pr of entPrims(e, doc.ctx())) {
         if (pr.k === 'pl' && pr.closed && pr.fill && pr.fill !== 'tint' && pointInPolygon(p, pr.pts)) { d = tol * 0.5; break; }

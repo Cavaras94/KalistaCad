@@ -26,6 +26,10 @@ export interface Host {
   zoomPrevious(): void;
   run(cmd: string): void;
   clipboard: { ents: NewEnt[]; base: Vec } | null;
+  /** finestra con delle caselle da spuntare; null se annullata */
+  choose(title: string, items: { key: string; label: string; on: boolean }[]): Promise<Record<string, boolean> | null>;
+  /** fa scegliere un file di immagine; w e h sono in pixel. null se si rinuncia */
+  pickImage(): Promise<{ src: string; w: number; h: number } | null>;
 }
 
 export abstract class Tool {
@@ -47,7 +51,10 @@ export abstract class Tool {
 
   abstract start(): void;
   point(_p: Vec): void {}
-  entity(_e: Ent, _p: Vec): void {}
+  /** shift = clic con Maiusc premuto */
+  entity(_e: Ent, _p: Vec, _shift = false): void {}
+  /** clic a vuoto mentre si chiede un'entità; false = non gestito (l'applicazione avvisa) */
+  entityMiss(_p: Vec): boolean { return false; }
   selectDone(): void {}
   /** testo o numero digitato; false = non riconosciuto */
   text(_s: string): boolean { return false; }
@@ -69,12 +76,14 @@ export abstract class Tool {
     this.h.refresh();
   }
 
-  matchOption(s: string): string | null {
+  /** exact = solo la sigla dell'opzione, senza accettare l'inizio della sua etichetta */
+  matchOption(s: string, exact = false): string | null {
     // senza badare ad accenti e maiuscole: "si" vale per "Sì"
     const fold = (x: string) => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
     const u = fold(s.trim());
     if (!u) return null;
     for (const o of this.options) if (fold(o.key) === u) return o.key;
+    if (exact) return null;
     for (const o of this.options) if (fold(o.label).startsWith(u)) return o.key;
     return null;
   }
@@ -141,7 +150,7 @@ export abstract class SelTool extends Tool {
     if (pre.length) {
       this.sel = pre;
       this.afterSelect();
-    } else this.ask(`${this.selPrompt}:`, [], undefined, 'select');
+    } else this.ask(this.selPrompt, [], undefined, 'select');
   }
 
   selectDone() {
