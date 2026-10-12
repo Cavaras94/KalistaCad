@@ -12,11 +12,13 @@ import { parsePoint, fmtLen } from '../tools/base';
 import { GripTool } from '../tools/misc';
 import { findCommand, suggest, COMMANDS } from './commands';
 import { icon } from './icons';
+import { logo, VERSION, VERSION_LONG } from './logo';
 import { Panels } from './panels';
-import { settingsDialog, helpDialog, printDialog, confirmBox, askText } from './dialogs';
+import { settingsDialog, helpDialog, printDialog, confirmBox, askText, importUnitsDialog } from './dialogs';
 import { exportDxf } from '../io/dxf-export';
 import { importDxf, importDwg } from '../io/files';
 import type { ImportResult } from '../io/importer';
+import { importSize, guessUnits, rescaleImport } from '../io/importer';
 
 const AUTOSAVE_KEY = 'planimetrie.autosave';
 const BG = '#1b1f26';
@@ -87,7 +89,8 @@ export class App implements Host {
     if (restored) this.zoomExtents(); else this.defaultView();
     this.panels.refresh();
     this.setIdlePrompt();
-    this.msg('Planimetrie pronto. Digitare un comando (es. L, PL, MURO, PORTA, QL) oppure ? per l\'elenco.');
+    this.msg(`${VERSION_LONG}.`);
+    this.msg('Kalista pronto. Digitare un comando (es. L, PL, MURO, PORTA, QL) oppure ? per l\'elenco.');
     window.addEventListener('beforeunload', e => { if (this.doc.dirty && !this.fileHandle) { this.autosaveNow(); } if (this.doc.dirty) { e.preventDefault(); } });
   }
 
@@ -271,7 +274,7 @@ export class App implements Host {
   private previewCtx(list: Ent[]): PrimCtx {
     const s = this.doc.settings;
     const base = this.doc.ctx();
-    return { dimH: s.dimH, dimDec: s.dimDec, areaDiv: base.areaDiv, walls: list.some(e => e.t === 'wall') ? buildWallCtx(list) : undefined };
+    return { dimH: s.dimH, dimDec: s.dimDec, areaDiv: base.areaDiv, walls: list.some(e => e.t === 'wall') ? buildWallCtx(list) : undefined, blocks: base.blocks };
   }
 
   private paintTemp(g: CanvasRenderingContext2D, list: NewEnt[], ghost: boolean) {
@@ -805,7 +808,23 @@ export class App implements Host {
       case 'print': this.openPrint(); break;
       case 'layer': $('layers-panel').scrollIntoView({ behavior: 'smooth' }); $('layers-panel').classList.add('flash'); setTimeout(() => $('layers-panel').classList.remove('flash'), 800); break;
       case 'properties': $('props-panel').classList.add('flash'); setTimeout(() => $('props-panel').classList.remove('flash'), 800); break;
-      case 'settings': settingsDialog(doc, this.snapSt, s => { doc.edit('Impostazioni', () => { doc.settings = s; }); this.updateStatus(); }); break;
+      case 'settings': settingsDialog(doc, this.snapSt, (s, convert) => {
+        const from = doc.settings.units, to = s.units;
+        const converting = convert && to !== from;
+        doc.edit(converting ? 'Cambio unità' : 'Impostazioni', () => {
+          // i valori della finestra sono ancora nell'unità di prima: si convertono insieme al disegno
+          doc.settings = converting ? { ...s, units: from } : s;
+          if (converting) doc.convertUnits(to);
+        });
+        if (to !== from) {
+          this.printWin = null;
+          this.zoomExtents();
+          this.msg(converting
+            ? `Unità cambiate da ${UNIT_LABEL[from]} a ${UNIT_LABEL[to]}: disegno convertito, le misure reali sono le stesse.`
+            : `Unità cambiate da ${UNIT_LABEL[from]} a ${UNIT_LABEL[to]} senza convertire: i numeri sono gli stessi, le misure reali no.`);
+        }
+        this.updateStatus();
+      }); break;
       case 'help': helpDialog(); break;
     }
   }
@@ -838,13 +857,19 @@ export class App implements Host {
     const groups: [string, [string, string, string][]][] = [
       ['File', [['new', 'NEW', 'Nuovo (Ctrl+N)'], ['open', 'OPEN', 'Apri disegno, DXF o DWG (Ctrl+O)'], ['save', 'SAVE', 'Salva (Ctrl+S)'], ['import', 'IMPORT', 'Importa DXF/DWG nel disegno'], ['export', 'DXFOUT', 'Esporta DXF'], ['print', 'PRINT', 'Stampa (Ctrl+P)']]],
       ['', [['undo', 'UNDO', 'Annulla (Ctrl+Z)'], ['redo', 'REDO', 'Ripristina (Ctrl+Y)']]],
-      ['Disegno', [['line', 'LINE', 'Linea (L)'], ['pline', 'PLINE', 'Polilinea (PL)'], ['rect', 'RECTANGLE', 'Rettangolo (REC)'], ['circle', 'CIRCLE', 'Cerchio (C)'], ['arc', 'ARC', 'Arco (A)'], ['text', 'TEXT', 'Testo (T)'], ['hatch', 'HATCH', 'Tratteggio (H)']]],
+      ['Disegno', [['line', 'LINE', 'Linea (L)'], ['pline', 'PLINE', 'Polilinea (PL)'], ['rect', 'RECTANGLE', 'Rettangolo (REC)'], ['circle', 'CIRCLE', 'Cerchio (C)'], ['arc', 'ARC', 'Arco (A)'], ['ellipse', 'ELLIPSE', 'Ellisse (EL)'], ['spline', 'SPLINE', 'Spline (SPL)'], ['text', 'TEXT', 'Testo (T)'], ['hatch', 'HATCH', 'Tratteggio (H)']]],
       ['Planimetria', [['wall', 'WALL', 'Muro (MURO)'], ['door', 'DOOR', 'Porta (PORTA)'], ['window', 'WINDOW', 'Finestra (FINESTRA)'], ['room', 'ROOM', 'Locale con superficie (LOCALE)']]],
-      ['Quote', [['dimlin', 'DIMLINEAR', 'Quota lineare (DLI)'], ['dimali', 'DIMALIGNED', 'Quota allineata (DAL)'], ['dimcont', 'DIMCONTINUE', 'Quota continua (DCO)']]],
-      ['Modifica', [['move', 'MOVE', 'Sposta (M)'], ['copy', 'COPY', 'Copia (CO)'], ['rotate', 'ROTATE', 'Ruota (RO)'], ['mirror', 'MIRROR', 'Specchio (MI)'], ['scale', 'SCALE', 'Scala (SC)'], ['offset', 'OFFSET', 'Offset (O)'], ['trim', 'TRIM', 'Taglia (TR)'], ['extend', 'EXTEND', 'Estendi (EX)'], ['fillet', 'FILLET', 'Raccorda (F)'], ['stretch', 'STRETCH', 'Stira (S)'], ['join', 'JOIN', 'Unisci (J)'], ['explode', 'EXPLODE', 'Esplodi (X)'], ['erase', 'ERASE', 'Cancella (E, Canc)']]],
+      ['Quote', [['dimlin', 'DIMLINEAR', 'Quota lineare (DLI)'], ['dimali', 'DIMALIGNED', 'Quota allineata (DAL)'], ['dimcont', 'DIMCONTINUE', 'Quota continua (DCO)'], ['dimrad', 'DIMRADIUS', 'Quota raggio (DRA)'], ['dimdia', 'DIMDIAMETER', 'Quota diametro (DDI)'], ['dimang', 'DIMANGULAR', 'Quota angolare (DAN)']]],
+      ['Blocchi', [['block', 'BLOCK', 'Crea blocco dalla selezione (B)'], ['insert', 'INSERT', 'Inserisci blocco (I)']]],
+      ['Modifica', [['move', 'MOVE', 'Sposta (M)'], ['copy', 'COPY', 'Copia (CO)'], ['rotate', 'ROTATE', 'Ruota (RO)'], ['mirror', 'MIRROR', 'Specchio (MI)'], ['scale', 'SCALE', 'Scala (SC)'], ['offset', 'OFFSET', 'Offset (O)'], ['trim', 'TRIM', 'Taglia (TR)'], ['extend', 'EXTEND', 'Estendi (EX)'], ['fillet', 'FILLET', 'Raccorda (F)'], ['chamfer', 'CHAMFER', 'Smusso (CHA)'], ['array', 'ARRAY', 'Serie (AR)'], ['stretch', 'STRETCH', 'Stira (S)'], ['join', 'JOIN', 'Unisci (J)'], ['explode', 'EXPLODE', 'Esplodi (X)'], ['matchprop', 'MATCHPROP', 'Copia proprietà: layer, colore, stile di quote e testi (MA)'], ['erase', 'ERASE', 'Cancella (E, Canc)']]],
       ['Vista', [['zoomext', 'ZOOMEXTENTS', 'Zoom estensioni (ZE, doppio clic rotella)'], ['zoomwin', 'ZOOM', 'Zoom (Z)'], ['pan', 'PAN', 'Pan (P)'], ['dist', 'DIST', 'Distanza (DI)'], ['area', 'AREA', 'Area (AA)']]],
       ['', [['settings', 'SETTINGS', 'Impostazioni (DS)'], ['help', 'HELP', 'Comandi e scorciatoie (F1)']]],
     ];
+    const brand = document.createElement('div');
+    brand.className = 'brand';
+    brand.innerHTML = `${logo(24)}<span>Kalista</span><small>v${VERSION}</small>`;
+    brand.title = VERSION_LONG;
+    bar.append(brand);
     for (const [title, btns] of groups) {
       const g = document.createElement('div');
       g.className = 'tb-group';
@@ -892,7 +917,7 @@ export class App implements Host {
     for (const [k, val] of Object.entries(on)) $(`st-${k}`)?.classList.toggle('on', val);
     const info = $('st-info');
     if (info) info.textContent = `${UNIT_LABEL[this.doc.settings.units]} · layer ${this.doc.current}`;
-    document.title = `${this.fileName}${this.doc.dirty ? ' *' : ''} – Planimetrie`;
+    document.title = `${this.fileName}${this.doc.dirty ? ' *' : ''} – Kalista`;
   }
 
   private updateCoords() {
@@ -953,7 +978,7 @@ export class App implements Host {
     if (mode === 'open' && this.doc.dirty && this.doc.ents.length && !(await confirmBox('Apri', 'Il disegno corrente ha modifiche non salvate. Continuare e perderle?'))) return;
     this.pickMode = mode;
     const inp = $<HTMLInputElement>('file-input');
-    inp.accept = mode === 'open' ? '.planim,.json,.dxf,.dwg' : '.dxf,.dwg';
+    inp.accept = mode === 'open' ? '.kalista,.planim,.json,.dxf,.dwg' : '.dxf,.dwg';
     inp.value = '';
     inp.click();
   }
@@ -964,11 +989,11 @@ export class App implements Host {
     const ext = f.name.toLowerCase().split('.').pop() ?? '';
     try {
       const buf = await f.arrayBuffer();
-      if (ext === 'planim' || ext === 'json') {
+      if (ext === 'kalista' || ext === 'planim' || ext === 'json') {
         const d = JSON.parse(new TextDecoder().decode(buf)) as DocData;
         this.doc.load(d);
         this.fileHandle = null;
-        this.fileName = f.name.replace(/\.(planim|json)$/i, '');
+        this.fileName = f.name.replace(/\.(kalista|planim|json)$/i, '');
         this.selection.clear();
         this.msg(`Aperto ${f.name}: ${this.doc.ents.length} entità.`);
         this.zoomExtents();
@@ -977,7 +1002,14 @@ export class App implements Host {
       }
       if (ext !== 'dxf' && ext !== 'dwg') { this.msg(`Formato non riconosciuto: .${ext}`); return; }
       this.msg(`Lettura di ${f.name}…`);
-      const r = ext === 'dxf' ? importDxf(buf, this.doc.settings.units) : await importDwg(buf, this.doc.settings.units);
+      const docUnits = this.doc.settings.units;
+      let r = ext === 'dxf' ? importDxf(buf, docUnits) : await importDwg(buf, docUnits);
+      const size = importSize(r);
+      if (size) {
+        const src = await importUnitsDialog(f.name, r.srcUnits, size, guessUnits(size, r.srcUnits, docUnits));
+        if (!src) { this.msg(`Importazione di ${f.name} annullata.`); return; }
+        r = rescaleImport(r, src, docUnits);
+      }
       if (this.pickMode === 'open') {
         this.doc.reset(this.doc.settings.units);
         this.fileHandle = null;
@@ -1002,7 +1034,7 @@ export class App implements Host {
         return { ...e, g: groups.get(e.g) };
       }));
     });
-    const units = r.srcUnits ? `unità del file: ${UNIT_LABEL[r.srcUnits]}` : 'unità non dichiarate';
+    const units = r.srcUnits ? `misure del file lette in ${UNIT_LABEL[r.srcUnits]}` : 'unità non dichiarate';
     this.msg(`${r.ents.length} entità importate da ${name} (${units}${r.scale !== 1 ? `, scalate ×${fmtLen(r.scale)} in ${UNIT_LABEL[doc.settings.units]}` : ''}).`);
     if (r.skipped.size) this.msg(`Non importati: ${[...r.skipped].map(([k, n]) => `${k} (${n})`).join(', ')}.`);
     for (const w of r.warnings) this.msg(`Attenzione: ${w}`);
@@ -1016,19 +1048,19 @@ export class App implements Host {
       if (!as && this.fileHandle) {
         await this.writeHandle(this.fileHandle, data);
       } else if (w.showSaveFilePicker) {
-        const h = await w.showSaveFilePicker({ suggestedName: `${this.fileName}.planim`, types: [{ description: 'Disegno Planimetrie', accept: { 'application/json': ['.planim'] } }] });
+        const h = await w.showSaveFilePicker({ suggestedName: `${this.fileName}.kalista`, types: [{ description: 'Disegno Kalista', accept: { 'application/json': ['.kalista'] } }] });
         await this.writeHandle(h, data);
         this.fileHandle = h;
-        this.fileName = (h.name as string).replace(/\.planim$/i, '');
+        this.fileName = (h.name as string).replace(/\.(kalista|planim)$/i, '');
       } else {
         const name = as || this.fileName === 'Senza nome' ? await askText('Salva', 'Nome del file', this.fileName) : this.fileName;
         if (!name) return;
-        this.fileName = name.replace(/\.planim$/i, '');
-        this.download(`${this.fileName}.planim`, data, 'application/json');
+        this.fileName = name.replace(/\.(kalista|planim)$/i, '');
+        this.download(`${this.fileName}.kalista`, data, 'application/json');
       }
       this.doc.dirty = false;
       this.updateStatus();
-      this.msg(`Salvato ${this.fileName}.planim`);
+      this.msg(`Salvato ${this.fileName}.kalista`);
     } catch (err) {
       if ((err as Error).name !== 'AbortError') this.msg(`Salvataggio non riuscito: ${(err as Error).message}`);
     }

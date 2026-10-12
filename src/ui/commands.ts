@@ -1,9 +1,11 @@
 // Comandi e alias, come in DraftSight/AutoCAD (nomi inglesi e italiani).
 import type { Host, Tool } from '../tools/base';
-import { LineTool, PolylineTool, RectTool, CircleTool, ArcTool, TextTool, HatchTool } from '../tools/draw';
-import { WallTool, DoorTool, WindowTool, RoomTool, DimTool, DimContinueTool } from '../tools/plan';
+import { LineTool, PolylineTool, RectTool, CircleTool, ArcTool, EllipseTool, SplineTool, TextTool, HatchTool } from '../tools/draw';
+import { BlockTool, InsertTool } from '../tools/blocks';
+import { WallTool, DoorTool, WindowTool, RoomTool, DimTool, DimContinueTool, DimRadiusTool, DimAngularTool } from '../tools/plan';
 import {
   EraseTool, MoveTool, CopyTool, RotateTool, MirrorTool, ScaleTool, OffsetTool, TrimTool, ExtendTool, FilletTool,
+  ChamferTool, ArrayTool,
   ExplodeTool, StretchTool, JoinTool, MatchPropTool,
 } from '../tools/modify';
 import { DistTool, AreaTool, IdTool, ListTool, ZoomTool, PanTool, PasteTool } from '../tools/misc';
@@ -25,8 +27,13 @@ export const COMMANDS: CmdDef[] = [
   { name: 'RECTANGLE', aliases: ['REC', 'RECT', 'RECTANG', 'RETTANGOLO'], label: 'Rettangolo', group: 'Disegno', make: h => new RectTool(h) },
   { name: 'CIRCLE', aliases: ['C', 'CERCHIO'], label: 'Cerchio', group: 'Disegno', make: h => new CircleTool(h) },
   { name: 'ARC', aliases: ['A', 'ARCO'], label: 'Arco', group: 'Disegno', make: h => new ArcTool(h) },
+  { name: 'ELLIPSE', aliases: ['EL', 'ELLISSE'], label: 'Ellisse', group: 'Disegno', make: h => new EllipseTool(h) },
+  { name: 'SPLINE', aliases: ['SPL'], label: 'Spline', group: 'Disegno', make: h => new SplineTool(h) },
   { name: 'TEXT', aliases: ['T', 'DT', 'MT', 'MTEXT', 'NOTE', 'TESTO'], label: 'Testo', group: 'Disegno', make: h => new TextTool(h) },
   { name: 'HATCH', aliases: ['H', 'BH', 'BHATCH', 'TRATTEGGIO'], label: 'Tratteggio', group: 'Disegno', make: h => new HatchTool(h) },
+
+  { name: 'BLOCK', aliases: ['B', 'BLOCCO', 'CREABLOCCO', 'MAKEBLOCK'], label: 'Crea blocco dalla selezione', group: 'Disegno', make: h => new BlockTool(h) },
+  { name: 'INSERT', aliases: ['I', 'INSERISCI', 'INSERTBLOCK'], label: 'Inserisci blocco', group: 'Disegno', make: h => new InsertTool(h) },
 
   { name: 'WALL', aliases: ['MURO', 'MU'], label: 'Muro', group: 'Planimetria', make: h => new WallTool(h) },
   { name: 'DOOR', aliases: ['PORTA', 'PO'], label: 'Porta', group: 'Planimetria', make: h => new DoorTool(h) },
@@ -36,6 +43,9 @@ export const COMMANDS: CmdDef[] = [
   { name: 'DIMLINEAR', aliases: ['DLI', 'DIMLIN', 'QL', 'QUOTA'], label: 'Quota lineare', group: 'Quote', make: h => new DimTool(h, false) },
   { name: 'DIMALIGNED', aliases: ['DAL', 'DIMALI', 'QA'], label: 'Quota allineata', group: 'Quote', make: h => new DimTool(h, true) },
   { name: 'DIMCONTINUE', aliases: ['DCO', 'DIMCONT', 'QC'], label: 'Quota continua', group: 'Quote', make: h => new DimContinueTool(h) },
+  { name: 'DIMRADIUS', aliases: ['DRA', 'DIMRAD', 'QR'], label: 'Quota raggio', group: 'Quote', make: h => new DimRadiusTool(h, false) },
+  { name: 'DIMDIAMETER', aliases: ['DDI', 'DIMDIA', 'QD'], label: 'Quota diametro', group: 'Quote', make: h => new DimRadiusTool(h, true) },
+  { name: 'DIMANGULAR', aliases: ['DAN', 'DIMANG', 'QANG'], label: 'Quota angolare', group: 'Quote', make: h => new DimAngularTool(h) },
 
   { name: 'ERASE', aliases: ['E', 'DELETE', 'CANCELLA'], label: 'Cancella', group: 'Modifica', make: h => new EraseTool(h), keys: 'Canc' },
   { name: 'MOVE', aliases: ['M', 'SPOSTA'], label: 'Sposta', group: 'Modifica', make: h => new MoveTool(h) },
@@ -47,10 +57,12 @@ export const COMMANDS: CmdDef[] = [
   { name: 'TRIM', aliases: ['TR', 'TAGLIA'], label: 'Taglia', group: 'Modifica', make: h => new TrimTool(h) },
   { name: 'EXTEND', aliases: ['EX', 'ESTENDI'], label: 'Estendi', group: 'Modifica', make: h => new ExtendTool(h) },
   { name: 'FILLET', aliases: ['F', 'RACCORDA', 'RACCORDO'], label: 'Raccorda', group: 'Modifica', make: h => new FilletTool(h) },
+  { name: 'CHAMFER', aliases: ['CHA', 'SMUSSO', 'SMUSSA'], label: 'Smusso', group: 'Modifica', make: h => new ChamferTool(h) },
+  { name: 'ARRAY', aliases: ['AR', 'PATTERN', 'SERIE'], label: 'Serie (rettangolare o polare)', group: 'Modifica', make: h => new ArrayTool(h) },
   { name: 'STRETCH', aliases: ['S', 'STIRA'], label: 'Stira', group: 'Modifica', make: h => new StretchTool(h) },
   { name: 'EXPLODE', aliases: ['X', 'ESPLODI'], label: 'Esplodi', group: 'Modifica', make: h => new ExplodeTool(h) },
   { name: 'JOIN', aliases: ['J', 'UNISCI'], label: 'Unisci', group: 'Modifica', make: h => new JoinTool(h) },
-  { name: 'MATCHPROP', aliases: ['MA', 'PAINTER', 'CORRISPONDENZA'], label: 'Corrispondenza proprietà', group: 'Modifica', make: h => new MatchPropTool(h) },
+  { name: 'MATCHPROP', aliases: ['MA', 'PAINTER', 'CORRISPONDENZA', 'COPIAPROPRIETA', 'PENNELLO'], label: 'Copia proprietà (pennello)', group: 'Modifica', make: h => new MatchPropTool(h) },
   { name: 'PASTECLIP', aliases: ['INCOLLA'], label: 'Incolla', group: 'Modifica', make: h => new PasteTool(h), keys: 'Ctrl+V' },
   { name: 'COPYCLIP', aliases: ['COPIAAPPUNTI'], label: 'Copia negli appunti', group: 'Modifica', action: 'copyclip', keys: 'Ctrl+C' },
   { name: 'CUTCLIP', aliases: ['TAGLIAAPPUNTI'], label: 'Taglia negli appunti', group: 'Modifica', action: 'cutclip', keys: 'Ctrl+X' },
@@ -72,7 +84,7 @@ export const COMMANDS: CmdDef[] = [
   { name: 'OPEN', aliases: ['APRI'], label: 'Apri (anche DXF e DWG)', group: 'File', action: 'open', keys: 'Ctrl+O' },
   { name: 'SAVE', aliases: ['QSAVE', 'SALVA'], label: 'Salva', group: 'File', action: 'save', keys: 'Ctrl+S' },
   { name: 'SAVEAS', aliases: ['SALVACOME'], label: 'Salva con nome', group: 'File', action: 'saveas', keys: 'Ctrl+Maiusc+S' },
-  { name: 'IMPORT', aliases: ['IMPORTA', 'INSERT', 'I'], label: 'Importa DXF/DWG nel disegno', group: 'File', action: 'import' },
+  { name: 'IMPORT', aliases: ['IMPORTA'], label: 'Importa DXF/DWG nel disegno', group: 'File', action: 'import' },
   { name: 'DXFOUT', aliases: ['EXPORT', 'ESPORTA', 'SAVEDXF'], label: 'Esporta DXF', group: 'File', action: 'dxfout' },
   { name: 'PRINT', aliases: ['PLOT', 'STAMPA'], label: 'Stampa', group: 'File', action: 'print', keys: 'Ctrl+P' },
 

@@ -5,6 +5,7 @@ import type { SnapKind } from '../model/entities';
 import type { SnapSettings } from '../view/snap';
 import { SNAP_LABEL } from '../view/snap';
 import { COMMANDS } from './commands';
+import { VERSION_LONG } from './logo';
 import type { Box } from '../model/geom';
 import { buildSheet, PAPERS, STD_SCALES, Paper, PrintOpts, TitleFields, WallFill } from '../print/sheet';
 
@@ -82,7 +83,37 @@ export function confirmBox(title: string, text: string, ok = 'Continua'): Promis
 
 // ---------------------------------------------------------------- impostazioni
 
-export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Settings) => void) {
+/**
+ * Chiede in che unità sono le misure di un file importato, mostrando quanto misurerebbe il disegno
+ * in ciascun caso. null = importazione annullata.
+ */
+export function importUnitsDialog(name: string, declared: Units | null, size: { w: number; h: number }, suggested: Units): Promise<Units | null> {
+  return new Promise(resolve => {
+    let done = false;
+    const fmt = (x: number) => (x >= 100 ? x.toFixed(0) : x >= 1 ? x.toFixed(2) : x.toPrecision(2)).replace('.', ',');
+    const body = el('div', { class: 'units-choice' });
+    body.append(el('p', {}, declared
+      ? `Il file dichiara le misure in ${UNIT_LABEL[declared]}, ma spesso questa indicazione è sbagliata. Scegliere l'unità con cui il disegno ha le dimensioni giuste.`
+      : 'Il file non dichiara le unità. Scegliere quella con cui il disegno ha le dimensioni giuste.'));
+    const radios = new Map<Units, HTMLInputElement>();
+    for (const u of ['mm', 'cm', 'm'] as Units[]) {
+      const k = { mm: 0.001, cm: 0.01, m: 1 }[u];
+      const r = el('input', { type: 'radio', name: 'import-units', value: u });
+      r.checked = u === suggested;
+      radios.set(u, r);
+      body.append(el('label', { class: 'radio-row' }, r, el('span', {}, el('b', {}, UNIT_LABEL[u]), ` — il disegno misura ${fmt(size.w * k)} × ${fmt(size.h * k)} m${u === declared ? ' (dichiarata nel file)' : ''}`)));
+    }
+    modal(`Unità di ${name}`, body, [
+      { label: 'Annulla', onClick: () => { done = true; resolve(null); } },
+      { label: 'Importa', primary: true, onClick: () => { done = true; resolve([...radios].find(([, r]) => r.checked)?.[0] ?? suggested); } },
+    ]);
+    const root = document.getElementById('dialog-root')!;
+    const obs = new MutationObserver(() => { if (!root.querySelector('.modal')) { obs.disconnect(); if (!done) resolve(null); } });
+    obs.observe(root, { childList: true });
+  });
+}
+
+export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Settings, convert: boolean) => void) {
   const s = { ...doc.settings };
   const body = el('div', { class: 'form-grid' });
   const num = (label: string, key: keyof Settings, hint = '') => {
@@ -96,8 +127,14 @@ export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Setting
   const units = el('select');
   for (const u of ['mm', 'cm', 'm'] as Units[]) units.append(el('option', { value: u }, UNIT_LABEL[u]));
   units.value = s.units;
-  units.onchange = () => { s.units = units.value as Units; };
-  body.append(el('label', { class: 'field' }, el('span', {}, 'Unità del disegno'), units, el('small', {}, 'Non riscala il disegno: dice in che unità sono le coordinate.')));
+  body.append(el('label', { class: 'field' }, el('span', {}, 'Unità del disegno'), units, el('small', {}, 'L\'unità in cui si digitano e si leggono le misure.')));
+  const how = el('select');
+  how.append(el('option', { value: 'convert' }, 'Converti: le misure reali restano uguali'), el('option', { value: 'keep' }, 'Lascia i numeri come sono'));
+  const howField = el('label', { class: 'field span2' }, el('span', {}, 'Al cambio di unità'), how,
+    el('small', {}, 'Converti: un muro di 500 cm diventa di 5 m, e si adeguano anche spessori, testi, griglia e i valori qui sotto. Lascia i numeri: 500 cm diventano 500 m; serve solo se il disegno era stato fatto con l\'unità sbagliata.'));
+  howField.style.display = 'none';
+  units.onchange = () => { s.units = units.value as Units; howField.style.display = s.units === doc.settings.units ? 'none' : ''; };
+  body.append(howField);
   num('Passo griglia', 'grid');
   num('Passo snap (F9)', 'snap');
   num('Altezza testo', 'textH');
@@ -131,7 +168,7 @@ export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Setting
       label: 'Salva', primary: true, onClick: () => {
         snap.modes = new Set(kinds.filter(k => boxes.get(k)!.checked));
         snap.polarInc = parseFloat(polar.value);
-        onSave(s);
+        onSave(s, how.value === 'convert');
       },
     },
   ], true);
@@ -141,6 +178,7 @@ export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Setting
 
 export function helpDialog() {
   const body = el('div', { class: 'help' });
+  body.append(el('p', { class: 'muted' }, `${VERSION_LONG}.`));
   const groups = new Map<string, typeof COMMANDS>();
   for (const c of COMMANDS) {
     if (!groups.has(c.group)) groups.set(c.group, []);

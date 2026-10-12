@@ -1,6 +1,6 @@
 // Pannelli laterali: proprietà della selezione e layer.
 import type { Ent, HatchPattern, HAlign } from '../model/entities';
-import { TYPE_NAMES, roomArea, dimGeometry, fmtNum } from '../model/entities';
+import { TYPE_NAMES, roomArea, dimValue, fmtNum } from '../model/entities';
 import type { Doc, Layer, LineType } from '../model/document';
 import { LT_NAMES, UNIT_MM } from '../model/document';
 import { dist, angleOf, polygonArea } from '../model/geom';
@@ -17,7 +17,11 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, 
   return el;
 }
 
-const fmt = (x: number) => fmtNum(Math.round(x * 1000) / 1000, Number.isInteger(Math.round(x * 1000) / 1000) ? 0 : 3).replace(/,?0+$/, '');
+/** Numero con al più tre decimali, senza zeri finali dopo la virgola (40 resta 40; 0,250 diventa 0,25). */
+export const fmt = (x: number): string => {
+  const r = Math.round(x * 1000) / 1000;
+  return Number.isInteger(r) ? String(r) : fmtNum(r, 3).replace(/0+$/, '');
+};
 const parse = (s: string) => {
   const n = parseFloat(s.replace(',', '.'));
   return Number.isFinite(n) ? n : null;
@@ -62,7 +66,8 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
       { label: 'Allineamento', kind: 'select', options: [['l', 'Sinistra'], ['c', 'Centro'], ['r', 'Destra']], get: e => (e.t === 'text' ? e.ha : 'l'), set: (e, v) => (e.t === 'text' ? { ...e, ha: v as HAlign } : null) },
     ];
     case 'dim': return [
-      { label: 'Misura', kind: 'ro', single: true, get: e => { if (e.t !== 'dim') return ''; const g = dimGeometry(e); return g ? fmt(g.value) : ''; } },
+      { label: 'Altezza testo', kind: 'num', get: e => (e.t === 'dim' ? e.h ?? doc.settings.dimH : 0), set: numSet('h') },
+      { label: 'Misura', kind: 'ro', single: true, get: e => { if (e.t !== 'dim') return ''; const x = dimValue(e); return x === null ? '' : fmt(x) + (e.k === 'ang' ? '°' : ''); } },
       {
         label: 'Testo (vuoto = misura)', kind: 'text', get: e => (e.t === 'dim' ? e.s ?? '' : ''),
         set: (e, v) => { if (e.t !== 'dim') return null; const c = { ...e }; if (v.trim()) c.s = v; else delete c.s; return c; },
@@ -71,6 +76,19 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
     case 'room': return [
       { label: 'Nome', kind: 'text', get: e => (e.t === 'room' ? e.name : ''), set: (e, v) => (e.t === 'room' ? { ...e, name: v } : null) },
       { label: 'Superficie m²', kind: 'ro', single: true, get: e => (e.t === 'room' ? fmtNum(roomArea(e) * toM2, 2) : '') },
+    ];
+    case 'ellipse': return [
+      { label: 'Semiasse', kind: 'ro', single: true, get: e => (e.t === 'ellipse' ? fmt(Math.hypot(e.a.x, e.a.y)) : '') },
+      { label: 'Altro semiasse', kind: 'ro', single: true, get: e => (e.t === 'ellipse' ? fmt(Math.hypot(e.a.x, e.a.y) * e.k) : '') },
+    ];
+    case 'spline': return [
+      { label: 'Chiusa', kind: 'bool', get: e => (e.t === 'spline' ? e.closed : false), set: (e, v) => (e.t === 'spline' ? { ...e, closed: v === 'true' } : null) },
+      { label: 'Punti', kind: 'ro', single: true, get: e => (e.t === 'spline' ? e.pts.length : '') },
+    ];
+    case 'insert': return [
+      { label: 'Blocco', kind: 'ro', get: e => (e.t === 'insert' ? e.name : '') },
+      { label: 'Scala', kind: 'num', get: e => (e.t === 'insert' ? e.s : 0), set: numSet('s') },
+      { label: 'Rotazione °', kind: 'num', get: e => (e.t === 'insert' ? Math.round(((e.rot * 180) / Math.PI) * 1000) / 1000 : 0), set: (e, v) => { const n = parse(v); return n === null || e.t !== 'insert' ? null : { ...e, rot: (n * Math.PI) / 180 }; } },
     ];
     case 'hatch': return [
       { label: 'Pattern', kind: 'select', options: [['solid', 'Solido'], ['ansi31', 'ANSI31 (45°)'], ['ansi37', 'ANSI37 (incrociato)']], get: e => (e.t === 'hatch' ? e.pat : ''), set: (e, v) => (e.t === 'hatch' ? { ...e, pat: v as HatchPattern } : null) },

@@ -1,12 +1,12 @@
 // Disegno delle primitive su canvas.
-import type { Ent, Prim, PrimCtx } from '../model/entities';
-import { prims, primsBox, textLines, CHAR_W } from '../model/entities';
+import type { Ent, InsertE, Prim, PrimCtx } from '../model/entities';
+import { prims, primsBox, textLines, expandInsert, CHAR_W } from '../model/entities';
 import type { Doc, Layer } from '../model/document';
 import { LT_PATTERNS, UNIT_MM } from '../model/document';
 import { Box, TAU, boxOverlap, boxValid } from '../model/geom';
 import type { View } from './view';
 
-const CTX_TYPES = new Set<Ent['t']>(['dim', 'wall', 'door', 'window', 'room']);
+const CTX_TYPES = new Set<Ent['t']>(['dim', 'wall', 'door', 'window', 'room', 'insert']);
 const fixedCache = new WeakMap<Ent, { p: Prim[]; b: Box }>();
 const ctxCache = new WeakMap<Ent, { ctx: PrimCtx; p: Prim[]; b: Box }>();
 
@@ -26,6 +26,31 @@ function cached(e: Ent, ctx: PrimCtx): { p: Prim[]; b: Box } {
     fixedCache.set(e, c);
   }
   return c;
+}
+
+const kidsCache = new WeakMap<Ent, { ctx: PrimCtx; kids: Ent[] }>();
+
+/**
+ * Contenuto di un blocco inserito, come entità da disegnare ciascuna con il proprio layer e colore.
+ * Un inserimento senza definizione resta se stesso (si disegna come crocetta).
+ */
+export function insertKids(e: InsertE, ctx: PrimCtx): Ent[] {
+  const c = kidsCache.get(e);
+  if (c && c.ctx === ctx) return c.kids;
+  const kids = ctx.blocks?.[e.name] ? expandInsert(e, ctx.blocks) : [e];
+  kidsCache.set(e, { ctx, kids });
+  return kids;
+}
+
+/** Entità visibili da disegnare, con i blocchi aperti nel loro contenuto. */
+export function drawList(doc: Doc, ctx: PrimCtx): Ent[] {
+  const out: Ent[] = [];
+  for (const e of doc.ents) {
+    if (!doc.layer(e.layer).visible) continue;
+    if (e.t !== 'insert') { out.push(e); continue; }
+    for (const k of insertKids(e, ctx)) if (doc.layer(k.layer).visible) out.push(k);
+  }
+  return out;
 }
 
 export const entPrims = (e: Ent, ctx: PrimCtx): Prim[] => cached(e, ctx).p;
@@ -149,9 +174,7 @@ export function renderDoc(g: CanvasRenderingContext2D, view: View, doc: Doc, opt
   const layers = new Map(doc.layers.map(l => [l.name, l]));
   const dashes = new Map(doc.layers.map(l => [l.name, layerDash(doc, l, view)]));
   const passes: Ent[][] = [[], [], []];
-  for (const e of doc.ents) {
-    const l = layers.get(e.layer);
-    if (l && !l.visible) continue;
+  for (const e of drawList(doc, ctx)) {
     if (opts.skip?.has(e.id)) continue;
     passes[ORDER[e.t] ?? 2].push(e);
   }

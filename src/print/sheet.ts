@@ -4,7 +4,7 @@ import { textLines } from '../model/entities';
 import type { Doc } from '../model/document';
 import { LT_PATTERNS, UNIT_MM } from '../model/document';
 import { Box, sweep, polar, boxOverlap } from '../model/geom';
-import { entPrims, entBoxCached } from '../view/render';
+import { entPrims, entBoxCached, drawList } from '../view/render';
 
 export type Paper = 'A4' | 'A3' | 'A2' | 'A1' | 'A0';
 export const PAPERS: Record<Paper, [number, number]> = { A4: [210, 297], A3: [297, 420], A2: [420, 594], A1: [594, 841], A0: [841, 1189] };
@@ -95,7 +95,7 @@ export function buildSheet(doc: Doc, o: PrintOpts): Sheet {
   const wallFill = o.wallFill === 'nero' ? '#000' : o.wallFill === 'grigio' ? '#9a9a9a' : 'none';
   const out: string[] = [];
   const order = (t: string) => (t === 'hatch' || t === 'room' ? 0 : t === 'wall' ? 1 : 2);
-  const ents = doc.ents.filter(e => layers.get(e.layer)?.visible !== false && boxOverlap(entBoxCached(e, ctx), visible))
+  const ents = drawList(doc, ctx).filter(e => boxOverlap(entBoxCached(e, ctx), visible))
     .sort((a, b) => order(a.t) - order(b.t));
 
   for (const e of ents) {

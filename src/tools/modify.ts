@@ -1,9 +1,9 @@
 // Comandi di modifica.
 import type { Ent, NewEnt, LineE, WallE } from '../model/entities';
-import { transform, explode, stretch } from '../model/entities';
-import { offsetEnt, trimEnt, extendEnt, fillet, joinEnts, boundaryCurves } from '../model/ops';
+import { transform, explode, stretch, entBox, editCurves } from '../model/entities';
+import { offsetEnt, trimEnt, extendEnt, fillet, chamfer, arrayRect, arrayPolar, joinEnts, boundaryCurves } from '../model/ops';
 import {
-  Vec, Box, Mat, Curve, add, sub, dist, angleOf, translate, rotateAbout, scaleAbout, mirrorAcross, inBox, boxOf,
+  Vec, Box, Mat, Curve, add, sub, dist, angleOf, translate, rotateAbout, scaleAbout, mirrorAcross, inBox, boxOf, emptyBox, boxUnion, boxValid, distToCurve, TAU,
 } from '../model/geom';
 import { Tool, SelTool, O, parseNum, parseAngle, fmtLen } from './base';
 
@@ -267,7 +267,7 @@ export class OffsetTool extends Tool {
       if (d <= 1e-12) return;
     }
     const r = offsetEnt(this.target, d, p);
-    if (!r) { this.h.msg('Offset non possibile su questa entità (polilinee con archi non ancora gestite).'); return; }
+    if (!r) { this.h.msg('Offset non possibile: la distanza è troppo grande per questa forma.'); return; }
     this.h.doc.edit('Offset', () => this.h.doc.add(r));
     this.h.setSelection([]);
     this.askEnt();
@@ -288,6 +288,7 @@ function distanceTo(e: Ent, p: Vec): number {
     const L = Math.hypot(d.x, d.y);
     return L < 1e-12 ? 0 : Math.abs((d.x * (p.y - e.a.y) - d.y * (p.x - e.a.x)) / L);
   }
+  if (e.t === 'poly' && e.bulges?.some(b => Math.abs(b) > 1e-9)) return Math.min(...editCurves(e).map(c => distToCurve(p, c)));
   if (e.t === 'poly') {
     let best = Infinity;
     const n = e.pts.length;
@@ -416,6 +417,188 @@ export class FilletTool extends Tool {
   enter() { if (this.numberAsText) this.askFirst(); else this.h.done(); }
 }
 
+// ---------------------------------------------------------------- SMUSSO
+
+export class ChamferTool extends Tool {
+  readonly name = 'SMUSSO';
+  private first: { e: LineE; p: Vec } | null = null;
+  private asking: 'd1' | 'd2' | null = null;
+  private def2 = 0;
+
+  start() { this.askFirst(); }
+
+  private askFirst() {
+    this.first = null;
+    this.asking = null;
+    const s = this.h.doc.settings;
+    this.ask(`Selezionare la prima linea (distanze ${fmtLen(s.chamferD1)} e ${fmtLen(s.chamferD2)}) o`, [O('D', 'Distanze')], undefined, 'entity');
+  }
+
+  private askD2(def: number) {
+    this.asking = 'd2';
+    this.def2 = def;
+    this.ask('Specificare la seconda distanza di smusso', [], fmtLen(def), 'none');
+  }
+
+  option(k: string) {
+    if (k === 'D') { this.asking = 'd1'; this.ask('Specificare la prima distanza di smusso', [], fmtLen(this.h.doc.settings.chamferD1), 'none'); }
+  }
+
+  text(s: string): boolean {
+    const n = parseNum(s);
+    if (n === null || n < 0 || !this.asking) return false;
+    if (this.asking === 'd1') { this.h.doc.settings.chamferD1 = n; this.askD2(n); }
+    else { this.h.doc.settings.chamferD2 = n; this.askFirst(); }
+    return true;
+  }
+
+  entity(e: Ent, p: Vec) {
+    if (e.t !== 'line') { this.h.msg('Smusso possibile fra due linee.'); return; }
+    if (!this.h.doc.isEditable(e)) return;
+    if (!this.first) {
+      this.first = { e, p };
+      this.h.setSelection([e.id]);
+      this.ask('Selezionare la seconda linea', [], undefined, 'entity');
+      return;
+    }
+    if (e.id === this.first.e.id) return;
+    const s = this.h.doc.settings;
+    const r = chamfer(this.first.e, this.first.p, e, p, s.chamferD1, s.chamferD2);
+    if (r === 'parallel') { this.h.msg('Le due linee sono parallele.'); return; }
+    if (r === 'short') { this.h.msg('Distanza di smusso troppo grande per queste linee.'); return; }
+    this.h.doc.edit('Smusso', () => {
+      this.h.doc.replace([r.a, r.b]);
+      if (r.line) this.h.doc.add(r.line);
+    });
+    this.h.setSelection([]);
+    this.h.done();
+  }
+
+  enter() {
+    if (this.asking === 'd1') this.askD2(this.h.doc.settings.chamferD1);
+    else if (this.asking === 'd2') { this.h.doc.settings.chamferD2 = this.def2; this.askFirst(); }
+    else this.h.done();
+  }
+}
+
+// ---------------------------------------------------------------- SERIE
+
+const ARRAY_MAX = 5000;
+
+export class ArrayTool extends SelTool {
+  readonly name = 'SERIE';
+  private step: 'type' | 'rows' | 'cols' | 'dy' | 'dx' | 'center' | 'count' | 'fill' | 'rot' = 'type';
+  private rows = 1;
+  private cols = 1;
+  private dy = 0;
+  private c: Vec | null = null;
+  private n = 0;
+  private fill = TAU;
+
+  afterSelect() {
+    this.step = 'type';
+    this.ask('Tipo di serie', [O('R', 'Rettangolare'), O('P', 'Polare')], 'R', 'none');
+  }
+
+  private num(step: ArrayTool['step'], prompt: string, def?: string) {
+    this.step = step;
+    this.ask(prompt, [], def, 'none');
+  }
+
+  option(k: string) {
+    if (this.step === 'type') {
+      if (k === 'R') this.num('rows', 'Numero di righe (---)', '1');
+      else { this.step = 'center'; this.ask('Specificare il centro della serie'); }
+    } else if (this.step === 'rot') this.polar(k === 'S');
+  }
+
+  point(p: Vec) {
+    if (this.step !== 'center') return;
+    this.c = p;
+    this.num('count', 'Numero di elementi (originale compreso)');
+  }
+
+  text(s: string): boolean {
+    const n = parseNum(s);
+    if (n === null) return false;
+    const count = (): boolean => {
+      if (Number.isInteger(n) && n >= 1) return true;
+      this.h.msg('Serve un numero intero maggiore di zero.');
+      return false;
+    };
+    switch (this.step) {
+      case 'rows': if (count()) { this.rows = n; this.num('cols', 'Numero di colonne (|||)', '1'); } return true;
+      case 'cols': if (count()) { this.cols = n; this.afterCounts(); } return true;
+      case 'dy': this.dy = n; this.afterDy(); return true;
+      case 'dx': this.rect(n); return true;
+      case 'count':
+        if (!count()) return true;
+        if (n < 2) { this.h.msg('Servono almeno 2 elementi.'); return true; }
+        this.n = n;
+        this.num('fill', 'Angolo da riempire (+ antiorario, - orario)', '360');
+        return true;
+      case 'fill':
+        if (Math.abs(n) < 1e-9 || Math.abs(n) > 360) { this.h.msg('Angolo fra -360 e 360, diverso da zero.'); return true; }
+        this.fill = (n * Math.PI) / 180;
+        this.askRot();
+        return true;
+      default: return false;
+    }
+  }
+
+  enter() {
+    switch (this.step) {
+      case 'type': this.option('R'); break;
+      case 'rows': this.rows = 1; this.num('cols', 'Numero di colonne (|||)', '1'); break;
+      case 'cols': this.cols = 1; this.afterCounts(); break;
+      case 'fill': this.fill = TAU; this.askRot(); break;
+      case 'rot': this.polar(true); break;
+      case 'dy': case 'dx': case 'count': this.h.msg('Serve un valore.'); break;
+      default: this.finish();
+    }
+  }
+
+  private askRot() {
+    this.step = 'rot';
+    this.ask('Ruotare gli elementi copiati?', [O('S', 'Sì'), O('N', 'No')], 'S', 'none');
+  }
+
+  private afterCounts() {
+    if (this.rows === 1 && this.cols === 1) { this.h.msg('Una riga e una colonna: niente da copiare.'); this.finish(); return; }
+    if (this.rows > 1) this.num('dy', 'Distanza fra le righe (negativa = verso il basso)');
+    else this.afterDy();
+  }
+
+  private afterDy() {
+    if (this.cols > 1) this.num('dx', 'Distanza fra le colonne (negativa = verso sinistra)');
+    else this.rect(0);
+  }
+
+  private rect(dx: number) { this.make(arrayRect(this.rows, this.cols, this.dy, dx)); }
+
+  private polar(rotateItems: boolean) {
+    const ctx = this.h.doc.ctx();
+    let b = emptyBox();
+    for (const e of this.sel) { const eb = entBox(e, ctx); if (boxValid(eb)) b = boxUnion(b, eb); }
+    const ref = boxValid(b) ? { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 } : this.c!;
+    this.make(arrayPolar(this.c!, this.n, this.fill, rotateItems, ref));
+  }
+
+  private make(mats: Mat[]) {
+    if (mats.length * this.sel.length > ARRAY_MAX) {
+      this.h.msg(`Troppe copie (${mats.length * this.sel.length}): il massimo è ${ARRAY_MAX}.`);
+      this.finish();
+      return;
+    }
+    const copies = mats.flatMap(m => this.sel.map(e => strip(transform(e, m))));
+    this.h.doc.edit('Serie', () => this.h.doc.addMany(copies));
+    this.h.msg(`${copies.length} entità create.`);
+    this.finish();
+  }
+
+  private finish() { this.h.setSelection([]); this.h.done(); }
+}
+
 // ---------------------------------------------------------------- ESPLODI
 
 export class ExplodeTool extends SelTool {
@@ -513,6 +696,10 @@ export class MatchPropTool extends Tool {
     if (s.color) upd.color = s.color; else delete upd.color;
     if (upd.t === 'wall' && s.t === 'wall') upd.th = s.th;
     if (upd.t === 'text' && s.t === 'text') upd.h = s.h;
+    // fra quote passa lo stile: l'altezza del testo (se l'origine usa quella del disegno, anche la destinazione)
+    if (upd.t === 'dim' && s.t === 'dim') { if (s.h !== undefined) upd.h = s.h; else delete upd.h; }
+    if (upd.t === 'dim' && s.t === 'text') upd.h = s.h;
+    if (upd.t === 'text' && s.t === 'dim') upd.h = s.h ?? this.h.doc.settings.dimH;
     this.h.doc.edit('Corrispondenza proprietà', () => this.h.doc.replace([upd]));
   }
   enter() { this.h.done(); }

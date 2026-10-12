@@ -151,6 +151,101 @@ export class RectTool extends Tool {
   preview(p: Vec): NewEnt[] { return this.a ? [this.rect(this.a, p)] : []; }
 }
 
+// ---------------------------------------------------------------- ELLISSE
+
+export class EllipseTool extends Tool {
+  readonly name = 'ELLISSE';
+  private byCenter = false;
+  private p1: Vec | null = null;
+  private c: Vec | null = null;
+  private a: Vec | null = null;
+
+  start() { this.ask('Specificare primo estremo dell\'asse o', [O('C', 'Centro')]); }
+
+  option(k: string) {
+    if (k === 'C' && !this.p1 && !this.c) { this.byCenter = true; this.ask('Specificare centro dell\'ellisse'); }
+  }
+
+  point(p: Vec) {
+    if (this.c && this.a) { this.commit(dist(this.c, p)); return; }
+    if (this.byCenter) {
+      if (!this.c) { this.c = p; this.base = p; this.ask('Specificare estremo dell\'asse'); return; }
+      if (dist(this.c, p) < 1e-9) return;
+      this.a = sub(p, this.c);
+    } else {
+      if (!this.p1) { this.p1 = p; this.base = p; this.ask('Specificare secondo estremo dell\'asse'); return; }
+      if (dist(this.p1, p) < 1e-9) return;
+      this.c = mid(this.p1, p);
+      this.a = sub(p, this.c);
+    }
+    // un numero digitato qui è una distanza diretta dal centro, quindi la lunghezza del semiasse;
+    // niente numberAsText, altrimenti una coordinata come 6100,190 verrebbe letta come 6100,19
+    this.base = this.c;
+    this.ask('Specificare lunghezza dell\'altro semiasse');
+  }
+
+  private make(d: number): NewEnt | null {
+    if (!this.c || !this.a || d < 1e-9) return null;
+    return { t: 'ellipse', c: this.c, a: this.a, k: d / len(this.a), layer: this.h.doc.current };
+  }
+
+  private commit(d: number) {
+    const e = this.make(d);
+    if (!e) return;
+    this.h.doc.edit('Ellisse', () => { this.h.doc.add(e); });
+    this.h.done();
+  }
+
+  preview(p: Vec): NewEnt[] {
+    if (this.c && this.a) { const e = this.make(dist(this.c, p)); return e ? [e] : []; }
+    const from = this.byCenter ? this.c : this.p1;
+    return from ? [{ t: 'line', a: from, b: p, layer: this.h.doc.current }] : [];
+  }
+}
+
+// ---------------------------------------------------------------- SPLINE
+
+export class SplineTool extends Tool {
+  readonly name = 'SPLINE';
+  private pts: Vec[] = [];
+
+  start() { this.askNext(); }
+
+  private askNext() {
+    const n = this.pts.length;
+    if (!n) { this.base = null; this.ask('Specificare primo punto'); return; }
+    this.base = this.pts[n - 1];
+    this.ask('Specificare punto successivo (Invio per finire) o', [...(n >= 3 ? [O('C', 'Chiudi')] : []), O('A', 'Annulla')]);
+  }
+
+  point(p: Vec) {
+    const n = this.pts.length;
+    if (n && dist(this.pts[n - 1], p) < 1e-9) return;
+    this.pts.push(p);
+    this.askNext();
+  }
+
+  option(k: string) {
+    if (k === 'A') { this.pts.pop(); this.askNext(); }
+    else if (k === 'C' && this.pts.length >= 3) this.commit(true);
+  }
+
+  enter() {
+    if (this.pts.length >= 2) this.commit(false);
+    else this.h.done();
+  }
+
+  private commit(closed: boolean) {
+    const pts = this.pts;
+    this.h.doc.edit('Spline', () => { this.h.doc.add({ t: 'spline', pts, closed, layer: this.h.doc.current }); });
+    this.h.done();
+  }
+
+  preview(p: Vec): NewEnt[] {
+    return this.pts.length ? [{ t: 'spline', pts: [...this.pts, p], closed: false, layer: this.h.doc.current }] : [];
+  }
+}
+
 // ---------------------------------------------------------------- CERCHIO
 
 export class CircleTool extends Tool {

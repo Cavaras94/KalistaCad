@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { Doc } from '../src/model/document';
 import { exportDxf } from '../src/io/dxf-export';
 import { importDxf, readDwgWith } from '../src/io/files';
-import { cleanMText, fromDwgDatabase, buildImport } from '../src/io/importer';
+import { cleanMText, fromDwgDatabase, buildImport, rescaleImport, importSize, guessUnits } from '../src/io/importer';
+import { roomArea } from '../src/model/entities';
+import type { WallE, InsertE, LineE, CircleE, RoomE } from '../src/model/entities';
+import { buildSheet } from '../src/print/sheet';
+import { fmt } from '../src/ui/panels';
 import { v, sweep } from '../src/model/geom';
 import type { ArcE, PolyE, TextE } from '../src/model/entities';
 
@@ -20,6 +24,109 @@ function sample(): Doc {
 }
 
 const toBuf = (s: string) => new TextEncoder().encode(s).buffer as ArrayBuffer;
+
+describe('numeri nel pannello Proprietà', () => {
+  it('gli interi tengono i loro zeri, i decimali perdono solo quelli finali', () => {
+    expect(fmt(40)).toBe('40');
+    expect(fmt(300)).toBe('300');
+    expect(fmt(0)).toBe('0');
+    expect(fmt(0.25)).toBe('0,25');
+    expect(fmt(12.5)).toBe('12,5');
+    expect(fmt(1.0004)).toBe('1');
+    expect(fmt(100.05)).toBe('100,05');
+  });
+});
+
+describe('unità del disegno', () => {
+  const make = () => {
+    const doc = new Doc();
+    doc.edit('prova', () => {
+      doc.add({ t: 'wall', a: v(0, 0), b: v(500, 0), th: 30, layer: 'MURI' });
+      doc.add({ t: 'room', pts: [v(0, 0), v(500, 0), v(500, 400), v(0, 400)], name: 'Soggiorno', layer: 'LOCALI' });
+      doc.add({ t: 'dim', a: v(0, 0), b: v(500, 0), p: v(0, -60), h: 25, layer: 'QUOTE' });
+      doc.blocks = { sedia: { ents: [{ id: 1, layer: '0', t: 'circle', c: v(20, 0), r: 10 }] } };
+      doc.add({ t: 'insert', name: 'sedia', p: v(100, 200), s: 2, rot: 0, layer: '0' });
+    });
+    return doc;
+  };
+  it('da centimetri a metri: stesse misure reali, numeri divisi per 100', () => {
+    const doc = make();
+    const areaBefore = roomArea(doc.ents[1] as RoomE) / doc.ctx().areaDiv;
+    doc.edit('Cambio unità', () => doc.convertUnits('m'));
+    const w = doc.ents[0] as WallE;
+    expect(w.b.x).toBeCloseTo(5, 12);
+    expect(w.th).toBeCloseTo(0.3, 12);
+    expect(doc.settings.units).toBe('m');
+    expect(doc.settings.wallTh).toBe(0.3);
+    expect(doc.settings.textH).toBe(0.2);
+    expect(doc.settings.grid).toBe(0.5);
+    expect(doc.settings.dimDec).toBe(2);
+    expect((doc.ents[2] as { h?: number }).h).toBeCloseTo(0.25, 12);
+    expect(roomArea(doc.ents[1] as RoomE) / doc.ctx().areaDiv).toBeCloseTo(areaBefore, 9);
+    expect(areaBefore).toBeCloseTo(20, 9);
+  });
+  it('i blocchi si convertono una volta sola', () => {
+    const doc = make();
+    doc.edit('Cambio unità', () => doc.convertUnits('m'));
+    const ins = doc.ents[3] as InsertE;
+    expect(ins.p).toEqual(v(1, 2));
+    expect(ins.s).toBe(2);
+    const c = doc.blocks.sedia.ents[0] as CircleE;
+    expect(c.r).toBeCloseTo(0.1, 12);
+    expect(c.c.x).toBeCloseTo(0.2, 12);
+  });
+  it('la stampa in scala non cambia', () => {
+    const doc = make();
+    const opts = { paper: 'A4', landscape: true, scale: 100, area: doc.extents()!, title: false, mono: true, lineweights: false, wallFill: 'nero', fields: {} } as unknown as Parameters<typeof buildSheet>[1];
+    const before = buildSheet(doc, opts).svg;
+    doc.edit('Cambio unità', () => doc.convertUnits('m'));
+    const after = buildSheet(doc, { ...opts, area: doc.extents()! }).svg;
+    // solo la geometria: il testo della quota cambia apposta, da 500 a 5,00
+    const nums = (s: string) => (s.match(/ d="[^"]*"/g) ?? []).join(' ').match(/-?\d+\.?\d*/g)!.map(Number);
+    const a = nums(before), b = nums(after);
+    expect(b.length).toBe(a.length);
+    a.forEach((x, i) => expect(Math.abs(x - b[i])).toBeLessThan(0.02));
+  });
+  it('andata e ritorno, e annulla', () => {
+    const doc = make();
+    doc.edit('Cambio unità', () => doc.convertUnits('m'));
+    doc.edit('Cambio unità', () => doc.convertUnits('cm'));
+    expect((doc.ents[0] as WallE).b.x).toBeCloseTo(500, 9);
+    expect(doc.settings.wallTh).toBe(30);
+    expect(doc.settings.dimDec).toBe(0);
+    doc.undo();
+    expect(doc.settings.units).toBe('m');
+    expect((doc.blocks.sedia.ents[0] as CircleE).r).toBeCloseTo(0.1, 12);
+    doc.undo();
+    expect(doc.settings.units).toBe('cm');
+    expect((doc.ents[0] as WallE).b.x).toBe(500);
+  });
+});
+
+describe('unità dei file importati', () => {
+  const raw = (insUnits: number | undefined) => ({
+    ents: [{ type: 'LINE' as const, layer: '0', a: v(0, 0), b: v(12.4, 9.8) }], blocks: new Map(), layers: [], insUnits,
+  });
+  it('un file che dichiara millimetri ma è in metri si può rileggere in metri', () => {
+    const r = buildImport(raw(4) as unknown as Parameters<typeof buildImport>[0], 'cm');
+    expect((r.ents[0] as LineE).b.x).toBeCloseTo(1.24, 9);
+    expect(importSize(r)!.w).toBeCloseTo(12.4, 9);
+    const fixed = rescaleImport(r, 'm', 'cm');
+    expect((fixed.ents[0] as LineE).b.x).toBeCloseTo(1240, 9);
+    expect(fixed.srcUnits).toBe('m');
+    expect(fixed.scale).toBe(100);
+    expect(rescaleImport(r, 'mm', 'cm').ents).toBe(r.ents);
+  });
+  it('propone l\'unità che dà la taglia di un edificio', () => {
+    expect(guessUnits({ w: 12.4, h: 9.8 }, 'mm', 'cm')).toBe('m');
+    expect(guessUnits({ w: 1240, h: 980 }, 'mm', 'cm')).toBe('cm');
+    expect(guessUnits({ w: 12400, h: 9800 }, 'mm', 'cm')).toBe('mm');
+    expect(guessUnits({ w: 12400, h: 9800 }, null, 'cm')).toBe('mm');
+    expect(guessUnits({ w: 1240, h: 980 }, 'cm', 'm')).toBe('cm');
+    expect(guessUnits({ w: 0.01, h: 0.01 }, 'cm', 'm')).toBe('cm');
+    expect(guessUnits(null, null, 'cm')).toBe('cm');
+  });
+});
 
 describe('DXF', () => {
   it('esporta e reimporta', () => {

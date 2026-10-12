@@ -1,9 +1,10 @@
 // Operazioni di modifica: offset, taglia, estendi, raccorda, unisci, contorni.
 import type { Ent, NewEnt, PolyE, LineE, WallE, PrimCtx } from './entities';
-import { primCurves, prims, polyPoints, DEFAULT_CTX } from './entities';
+import { primCurves, prims, polyPoints, ellipsePoints, splinePoints, DEFAULT_CTX } from './entities';
 import {
-  Vec, Curve, v, add, sub, mul, dot, cross, len, dist, perp, norm, angleOf, polar, normAng, sweep, lerp, same,
-  bulgeArc, intersect, lineLine, closestOnSeg, arcStart, arcEnd, seg, arcC, polygonArea, pointInPolygon, tessArc, TAU,
+  Vec, Curve, Mat, v, add, sub, mul, dot, cross, len, dist, perp, norm, angleOf, polar, normAng, sweep, lerp, same,
+  bulgeArc, intersect, lineLine, closestOnSeg, distToCurve, arcStart, arcEnd, seg, arcC, polygonArea, pointInPolygon, tessArc, TAU,
+  apply, translate, rotateAbout,
 } from './geom';
 
 type Base = Pick<Ent, 'layer' | 'color'>;
@@ -33,6 +34,69 @@ export function offsetPolyPts(pts: Vec[], closed: boolean, off: number): Vec[] |
   return out;
 }
 
+/**
+ * Offset di una polilinea con tratti ad arco: off > 0 a sinistra del verso di percorrenza.
+ * Ogni tratto diventa una parallela (o un arco concentrico); agli spigoli i tratti vicini si
+ * allungano o si accorciano fino a incontrarsi e, dove non si incontrano, li unisce un arco
+ * centrato sul vertice. null se la distanza è troppa per la forma (un arco si annulla o un tratto
+ * si rovescia).
+ */
+export function offsetPolyArcs(e: { pts: Vec[]; bulges?: number[]; closed: boolean }, off: number): { pts: Vec[]; bulges: number[] } | null {
+  interface Piece { a: Vec; b: Vec; arc?: { c: Vec; r: number; ccw: boolean }; dir?: Vec; sw0?: number }
+  const n = e.pts.length, m = e.closed ? n : n - 1;
+  const pieces: Piece[] = [];
+  for (let i = 0; i < m; i++) {
+    const a = e.pts[i], c = e.pts[(i + 1) % n], bu = e.bulges?.[i] ?? 0;
+    if (dist(a, c) < 1e-9) return null;
+    if (Math.abs(bu) > 1e-9) {
+      const arc = bulgeArc(a, c, bu);
+      const ccw = bu > 0;
+      const r = arc.r + (ccw ? -off : off);
+      if (r <= 1e-9) return null;
+      const k = r / arc.r;
+      pieces.push({ a: add(arc.c, mul(sub(a, arc.c), k)), b: add(arc.c, mul(sub(c, arc.c), k)), arc: { c: arc.c, r, ccw }, sw0: 4 * Math.atan(bu) });
+    } else {
+      const dir = norm(sub(c, a));
+      const o = mul(perp(dir), off);
+      pieces.push({ a: add(a, o), b: add(c, o), dir });
+    }
+  }
+  const full = (p: Piece): Curve => (p.arc ? arcC(p.arc.c, p.arc.r, 0, TAU, true) : seg(p.a, p.b));
+  const joins = e.closed ? m : m - 1;
+  const links: (Piece | null)[] = pieces.map(() => null);
+  for (let j = 0; j < joins; j++) {
+    const P = pieces[j], Q = pieces[(j + 1) % m], vtx = e.pts[(j + 1) % n];
+    if (same(P.b, Q.a, 1e-9)) continue;
+    let X: Vec | null = null, best = Infinity;
+    for (const x of intersect(full(P), full(Q), true, true)) {
+      const dd = dist(x, P.b) + dist(x, Q.a);
+      if (dd < best) { best = dd; X = x; }
+    }
+    if (X) { P.b = X; Q.a = X; } else links[j] = { a: P.b, b: Q.a, arc: { c: vtx, r: Math.abs(off), ccw: cross(sub(P.b, vtx), sub(Q.a, vtx)) > 0 } };
+  }
+  const pts: Vec[] = [], bulges: number[] = [];
+  const push = (p: Piece): boolean => {
+    if (dist(p.a, p.b) < 1e-9) return false;
+    let bu = 0;
+    if (p.arc) {
+      const a0 = angleOf(p.arc.c, p.a), a1 = angleOf(p.arc.c, p.b);
+      const sw = p.arc.ccw ? sweep(a0, a1) : -sweep(a1, a0);
+      if (p.sw0 !== undefined && Math.abs(sw) > Math.abs(p.sw0) + Math.PI) return false;
+      bu = Math.tan(sw / 4);
+    } else if (p.dir && dot(sub(p.b, p.a), p.dir) <= 0) return false;
+    pts.push(p.a);
+    bulges.push(bu);
+    return true;
+  };
+  for (let i = 0; i < m; i++) {
+    if (!push(pieces[i])) return null;
+    const l = links[i];
+    if (l && !push(l)) return null;
+  }
+  if (!e.closed) { pts.push(pieces[m - 1].b); bulges.push(0); }
+  return { pts, bulges };
+}
+
 /** Copia parallela a distanza d, dal lato del punto side. */
 export function offsetEnt(e: Ent, d: number, side: Vec): NewEnt | null {
   const b = baseOf(e);
@@ -50,7 +114,18 @@ export function offsetEnt(e: Ent, d: number, side: Vec): NewEnt | null {
       return e.t === 'circle' ? { ...b, t: 'circle', c: e.c, r } : { ...b, t: 'arc', c: e.c, r, a0: e.a0, a1: e.a1 };
     }
     case 'poly': {
-      if (e.bulges?.some(x => Math.abs(x) > 1e-9) || e.pts.length < 2) return null;
+      if (e.pts.length < 2) return null;
+      if (e.bulges?.some(x => Math.abs(x) > 1e-9)) {
+        // lato: a sinistra o a destra del tratto più vicino, nel verso di percorrenza
+        const ch = chainOf(e)!;
+        let near = ch.curves[0], nd = Infinity;
+        for (const c of ch.curves) { const dd = distToCurve(side, c); if (dd < nd) { nd = dd; near = c; } }
+        const left = near.k === 's'
+          ? cross(sub(near.b, near.a), sub(side, near.a)) >= 0
+          : ((near as DArc).sw > 0) === (dist(side, near.c) < near.r);
+        const r = offsetPolyArcs(e, left ? d : -d);
+        return r ? { ...b, t: 'poly', pts: r.pts, bulges: r.bulges, closed: e.closed } : null;
+      }
       // lato: segno rispetto al segmento più vicino
       let best = 0, bd = Infinity;
       const m = e.closed ? e.pts.length : e.pts.length - 1;
@@ -343,6 +418,52 @@ export function fillet(e1: Straight, p1: Vec, e2: Straight, p2: Vec, r: number):
   };
 }
 
+// ---------------------------------------------------------------- smusso
+
+/** Smusso fra due linee: d1 lungo la prima e d2 lungo la seconda, misurate dallo spigolo. */
+export function chamfer(e1: LineE, p1: Vec, e2: LineE, p2: Vec, d1: number, d2: number): { a: LineE; b: LineE; line?: NewEnt } | 'parallel' | 'short' {
+  const X = lineLine(e1.a, e1.b, e2.a, e2.b);
+  if (!X) return 'parallel';
+  const cut = (e: LineE, pick: Vec, d: number): { e: LineE; q: Vec } | null => {
+    const s = seg(e.a, e.b);
+    const keepA = localT(s, pick) < localT(s, X.p);
+    const far = keepA ? e.a : e.b;
+    if (dist(far, X.p) <= d + 1e-9) return null;
+    const q = add(X.p, mul(norm(sub(far, X.p)), d));
+    return { e: keepA ? { ...e, b: q } : { ...e, a: q }, q };
+  };
+  const c1 = cut(e1, p1, d1), c2 = cut(e2, p2, d2);
+  if (!c1 || !c2) return 'short';
+  if (dist(c1.q, c2.q) < 1e-9) return { a: c1.e, b: c2.e };
+  return { a: c1.e, b: c2.e, line: { ...baseOf(e1), t: 'line', a: c1.q, b: c2.q } };
+}
+
+// ---------------------------------------------------------------- serie
+
+/** Spostamenti delle copie di una serie rettangolare (l'originale, riga 0 colonna 0, è escluso). */
+export function arrayRect(rows: number, cols: number, dy: number, dx: number): Mat[] {
+  const out: Mat[] = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) if (r || c) out.push(translate(c * dx, r * dy));
+  return out;
+}
+
+/**
+ * Trasformazioni delle copie di una serie polare di n elementi (originale compreso) attorno a c.
+ * fill = angolo da riempire: sul giro completo gli elementi sono equidistanti, altrimenti il primo
+ * e l'ultimo stanno agli estremi. Senza rotazione le copie restano dritte e ruota solo il punto ref.
+ */
+export function arrayPolar(c: Vec, n: number, fill: number, rotateItems: boolean, ref: Vec): Mat[] {
+  const full = Math.abs(Math.abs(fill) - TAU) < 1e-9;
+  const step = full ? fill / n : fill / (n - 1);
+  const out: Mat[] = [];
+  for (let i = 1; i < n; i++) {
+    const m = rotateAbout(c, i * step);
+    if (rotateItems) out.push(m);
+    else { const q = apply(m, ref); out.push(translate(q.x - ref.x, q.y - ref.y)); }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- unisci
 
 interface Piece { id: number; pts: Vec[]; bulges: number[] }
@@ -407,6 +528,8 @@ export function closedLoopAt(ents: readonly Ent[], p: Vec): { loop: Vec[]; id: n
     if (e.t === 'poly' && e.closed) loop = polyPoints(e);
     else if (e.t === 'room') loop = e.pts;
     else if (e.t === 'circle') loop = tessArc(e.c, e.r, 0, TAU).slice(0, -1);
+    else if (e.t === 'ellipse') loop = ellipsePoints(e);
+    else if (e.t === 'spline' && e.closed) loop = splinePoints(e.pts, true);
     if (!loop || loop.length < 3 || !pointInPolygon(p, loop)) continue;
     const area = Math.abs(polygonArea(loop));
     if (!best || area < best.area) best = { loop, id: e.id, area };
@@ -422,6 +545,8 @@ export function islandsIn(ents: readonly Ent[], outer: Vec[], excludeId: number)
     let loop: Vec[] | null = null;
     if (e.t === 'poly' && e.closed) loop = polyPoints(e);
     else if (e.t === 'circle') loop = tessArc(e.c, e.r, 0, TAU).slice(0, -1);
+    else if (e.t === 'ellipse') loop = ellipsePoints(e);
+    else if (e.t === 'spline' && e.closed) loop = splinePoints(e.pts, true);
     if (loop && loop.length >= 3 && loop.every(q => pointInPolygon(q, outer))) out.push(loop);
   }
   return out;

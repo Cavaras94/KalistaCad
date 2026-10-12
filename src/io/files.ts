@@ -37,11 +37,38 @@ async function libredwg(): Promise<any> {
   if (!libPromise) {
     libPromise = (async () => {
       const mod = await import('@mlightcad/libredwg-web');
-      return mod.LibreDwg.create();
+      if (!__PORTABLE__) return mod.LibreDwg.create();
+      const { default: createModule } = await import('libredwg-wasm-module');
+      return mod.LibreDwg.createByWasmInstance(await createModule({ wasmBinary: await portableWasm() }));
     })();
     libPromise.catch(() => { libPromise = null; });
   }
   return libPromise;
+}
+
+/**
+ * Versione da chiavetta: la pagina è aperta da disco e non può scaricare il .wasm, che arriva
+ * invece da uno script accanto a Kalista.html (vedi scripts/chiavetta.mjs).
+ */
+function portableWasm(): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const missing = () => reject(new Error('per leggere i DWG serve il file kalista-dwg.js accanto a Kalista.html.'));
+    const s = document.createElement('script');
+    s.src = 'kalista-dwg.js';
+    s.onerror = missing;
+    s.onload = () => {
+      const g = window as unknown as { __KALISTA_DWG?: string };
+      const b64 = g.__KALISTA_DWG;
+      delete g.__KALISTA_DWG;
+      s.remove();
+      if (!b64) { missing(); return; }
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      resolve(bytes);
+    };
+    document.head.append(s);
+  });
 }
 
 /** Errori LibreDWG da 128 in su: il file non è stato letto. Sotto sono avvisi. */

@@ -1,9 +1,10 @@
 // Conversione di disegni DXF/DWG nelle entità del programma.
-import type { NewEnt, HAlign, VAlign } from '../model/entities';
+import type { Ent, NewEnt, HAlign, VAlign } from '../model/entities';
+import { transform, entBox } from '../model/entities';
 import type { Layer, LineType, Units } from '../model/document';
 import { UNIT_MM } from '../model/document';
 import {
-  Vec, Mat, v, add, dist, len, IDENT, apply, compose, translate, rotateAbout, scaleAbout,
+  Vec, Mat, v, add, dist, len, IDENT, apply, applyDir, compose, translate, rotateAbout, scaleAbout,
   det, matScale, isUniform, mapAngle, bulgeArc, sweep, tessArc, TAU, cross,
 } from '../model/geom';
 import { aciToHex, rgbIntToHex } from './colors';
@@ -181,6 +182,7 @@ class Builder {
         if (R <= 0) break;
         const rot = Math.atan2(e.major.y, e.major.x);
         const full = Math.abs(sweep(e.a0, e.a1) - TAU) < 1e-6 || Math.abs(e.a1 - e.a0) < 1e-9;
+        if (full && uniform) { this.push({ ...base, t: 'ellipse', c: P(e.c), a: applyDir(m, e.major), k: e.ratio }, g); break; }
         const sw = full ? TAU : sweep(e.a0, e.a1);
         const n = Math.max(24, Math.ceil(sw / (Math.PI / 48)));
         const pts: Vec[] = [];
@@ -261,6 +263,47 @@ function tessBulges(pts: (Vec & { bulge?: number })[], closed: boolean): Vec[] {
   }
   if (!closed) out.push(v(pts[n - 1].x, pts[n - 1].y));
   return out;
+}
+
+/**
+ * Rifà la conversione di un import supponendo che le misure del file siano in src, qualunque cosa
+ * il file dichiari: molti DWG dichiarano millimetri pur essendo disegnati in metri o centimetri.
+ */
+export function rescaleImport(r: ImportResult, src: Units, docUnits: Units): ImportResult {
+  const scale = UNIT_MM[src] / UNIT_MM[docUnits];
+  const f = scale / r.scale;
+  if (Math.abs(f - 1) < 1e-12) return { ...r, srcUnits: src, scale };
+  const m = scaleAbout(v(0, 0), f);
+  const ents = r.ents.map(e => { const { id: _id, ...rest } = transform({ ...e, id: 0 } as Ent, m); return rest as NewEnt; });
+  return { ...r, ents, srcUnits: src, scale };
+}
+
+/** Larghezza e altezza del disegno importato, nelle unità del file. */
+export function importSize(r: ImportResult): { w: number; h: number } | null {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const e of r.ents) {
+    const b = entBox({ ...e, id: 0 } as Ent);
+    if (b.x0 > b.x1 || b.y0 > b.y1) continue;
+    x0 = Math.min(x0, b.x0); y0 = Math.min(y0, b.y0); x1 = Math.max(x1, b.x1); y1 = Math.max(y1, b.y1);
+  }
+  if (x0 > x1) return null;
+  return { w: (x1 - x0) / r.scale, h: (y1 - y0) / r.scale };
+}
+
+/**
+ * Unità più credibile per un disegno di quelle dimensioni: quella dichiarata, se dà un disegno fra
+ * 3 m e 1 km; altrimenti quella che più lo avvicina alla taglia di un edificio. È solo la proposta
+ * iniziale: la scelta resta a chi importa, che vede le dimensioni risultanti.
+ */
+export function guessUnits(size: { w: number; h: number } | null, declared: Units | null, fallback: Units): Units {
+  if (!size) return declared ?? fallback;
+  const metres = (u: Units) => (Math.max(size.w, size.h) * UNIT_MM[u]) / 1000;
+  const ok = (u: Units) => metres(u) >= 3 && metres(u) <= 1000;
+  if (declared && ok(declared)) return declared;
+  const all: Units[] = ['mm', 'cm', 'm'];
+  const good = all.filter(ok);
+  if (!good.length) return declared ?? fallback;
+  return good.reduce((a, b) => (Math.abs(Math.log10(metres(b) / 20)) < Math.abs(Math.log10(metres(a) / 20)) ? b : a));
 }
 
 /** Converte un disegno intermedio nelle unità del documento. */

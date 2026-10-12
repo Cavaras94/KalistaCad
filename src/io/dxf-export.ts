@@ -1,6 +1,6 @@
 // Scrittura DXF R12 (AC1009).
 import type { Ent, Prim } from '../model/entities';
-import { prims, textLines } from '../model/entities';
+import { prims, textLines, flatEnts } from '../model/entities';
 import type { Doc, LineType } from '../model/document';
 import { LT_PATTERNS, UNIT_MM } from '../model/document';
 import { v, sweep } from '../model/geom';
@@ -73,7 +73,8 @@ export function exportDxf(doc: Doc): string {
 
   w.g(0, 'SECTION'); w.g(2, 'ENTITIES');
   const ctx = doc.ctx();
-  for (const e of doc.ents) writeEnt(w, e, prims(e, ctx));
+  // i blocchi escono aperti nel loro contenuto: il DXF R12 scritto qui non ha definizioni di blocco
+  for (const e of flatEnts(doc.ents, doc.blocks)) writeEnt(w, e, prims(e, ctx));
   w.g(0, 'ENDSEC');
   w.g(0, 'EOF');
   return w.text();

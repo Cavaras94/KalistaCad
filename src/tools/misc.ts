@@ -1,6 +1,6 @@
 // Consultazione, vista, appunti, grip.
 import type { Ent, NewEnt } from '../model/entities';
-import { TYPE_NAMES, grips, moveGrip, transform, polyPoints, roomArea, dimGeometry } from '../model/entities';
+import { TYPE_NAMES, grips, moveGrip, transform, polyPoints, roomArea, dimValue } from '../model/entities';
 import { UNIT_MM } from '../model/document';
 import { Vec, dist, angleOf, polygonArea, translate, same, TAU, sweep } from '../model/geom';
 import { Tool, SelTool, O, fmtLen, fmtPt } from './base';
@@ -85,10 +85,13 @@ export function describe(e: Ent): string {
     case 'arc': return `${head} centro ${fmtPt(e.c)}, raggio ${fmtLen(e.r)}, ampiezza ${deg(sweep(e.a0, e.a1))}°`;
     case 'poly': return `${head} ${e.pts.length} vertici${e.closed ? ', chiusa' : ''}`;
     case 'text': return `${head} "${e.s}", altezza ${fmtLen(e.h)}`;
-    case 'dim': { const g = dimGeometry(e); return `${head} misura ${g ? fmtLen(g.value) : '?'}`; }
+    case 'dim': { const x = dimValue(e); return `${head} misura ${x === null ? '?' : fmtLen(x) + (e.k === 'ang' ? '°' : '')}`; }
     case 'door': case 'window': return `${head} larghezza ${fmtLen(e.w)}`;
     case 'room': return `${head} "${e.name}", superficie ${fmtLen(roomArea(e))}`;
     case 'hatch': return `${head} ${e.pat}`;
+    case 'ellipse': { const r = Math.hypot(e.a.x, e.a.y); return `${head} centro ${fmtPt(e.c)}, semiassi ${fmtLen(r)} e ${fmtLen(r * e.k)}`; }
+    case 'spline': return `${head} ${e.pts.length} punti${e.closed ? ', chiusa' : ''}`;
+    case 'insert': return `${head} "${e.name}" in ${fmtPt(e.p)}, scala ${fmtLen(e.s)}, rotazione ${deg(e.rot)}°${e.flip ? ', specchiato' : ''}`;
   }
 }
 

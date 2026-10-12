@@ -1,9 +1,9 @@
 // Comandi da planimetria: muri, porte, finestre, locali, quote.
 import type { Ent, NewEnt, WallE, DimE } from '../model/entities';
-import { polyPoints, dimGeometry } from '../model/entities';
+import { polyPoints, dimGeometry, editCurves } from '../model/entities';
 import { offsetPolyPts } from '../model/ops';
 import { findRegion } from '../model/region';
-import { Vec, add, sub, mul, dot, dist, norm, perp, angleOf, same, closestOnSeg } from '../model/geom';
+import { Vec, Curve, Seg, add, sub, mul, dot, dist, norm, perp, angleOf, same, closestOnSeg, distToCurve, lineLine, arcStart, arcEnd } from '../model/geom';
 import { Tool, O, parseNum, fmtLen } from './base';
 import type { Host } from './base';
 
@@ -378,7 +378,7 @@ export class DimContinueTool extends Tool {
 
   start() {
     const d = lastDimId !== null ? this.h.doc.byId(lastDimId) : undefined;
-    if (d && d.t === 'dim') this.useDim(d);
+    if (d && d.t === 'dim' && !d.k) this.useDim(d);
     else this.ask('Selezionare la quota da continuare', [], undefined, 'entity');
   }
 
@@ -389,7 +389,7 @@ export class DimContinueTool extends Tool {
   }
 
   entity(e: Ent) {
-    if (e.t !== 'dim') { this.h.msg('Selezionare una quota.'); return; }
+    if (e.t !== 'dim' || e.k) { this.h.msg('Selezionare una quota lineare.'); return; }
     this.useDim(e);
   }
 
@@ -418,6 +418,117 @@ export class DimContinueTool extends Tool {
     const e = this.make(p);
     return e ? [e] : [];
   }
+}
+
+/** Tratto dell'entità (segmento o arco) più vicino al punto cliccato. */
+function nearestCurve(curves: Curve[], p: Vec): Curve | null {
+  let best: Curve | null = null, bd = Infinity;
+  for (const c of curves) { const d = distToCurve(p, c); if (d < bd) { bd = d; best = c; } }
+  return best;
+}
+
+export class DimRadiusTool extends Tool {
+  readonly name: string;
+  private c: Vec | null = null;
+  private r = 0;
+
+  constructor(h: Host, private dia: boolean) {
+    super(h);
+    this.name = dia ? 'QUOTA DIAMETRO' : 'QUOTA RAGGIO';
+  }
+
+  start() { this.ask('Selezionare un arco o un cerchio', [], undefined, 'entity'); }
+
+  entity(e: Ent, p: Vec) {
+    const cv = nearestCurve(editCurves(e, this.h.doc.ctx()).filter(c => c.k === 'a'), p);
+    if (!cv || cv.k !== 'a') { this.h.msg('Selezionare un arco o un cerchio.'); return; }
+    this.c = cv.c;
+    this.r = cv.r;
+    this.ask('Specificare posizione del testo di quota');
+  }
+
+  private make(p: Vec): NewEnt | null {
+    if (!this.c) return null;
+    const d = sub(p, this.c);
+    const u = dist(p, this.c) < 1e-9 ? { x: 1, y: 0 } : norm(d);
+    return { t: 'dim', k: this.dia ? 'dia' : 'rad', a: this.c, b: add(this.c, mul(u, this.r)), p, layer: 'QUOTE' };
+  }
+
+  point(p: Vec) {
+    const e = this.make(p);
+    if (!e) return;
+    this.h.doc.edit('Quota', () => { this.h.doc.ensureLayer('QUOTE'); this.h.doc.add(e); });
+    this.h.done();
+  }
+
+  preview(p: Vec): NewEnt[] {
+    const e = this.make(p);
+    return e ? [e] : [];
+  }
+}
+
+export class DimAngularTool extends Tool {
+  readonly name = 'QUOTA ANGOLARE';
+  private first: { s: Seg; p: Vec } | null = null;
+  private geo: { a: Vec; b: Vec; c: Vec } | null = null;
+
+  start() { this.ask('Selezionare la prima linea, oppure un arco', [], undefined, 'entity'); }
+
+  entity(e: Ent, p: Vec) {
+    const cv = nearestCurve(editCurves(e, this.h.doc.ctx()), p);
+    if (!cv) { this.h.msg('Selezionare una linea, una polilinea, un muro o un arco.'); return; }
+    if (!this.first) {
+      if (cv.k === 'a') {
+        if (cv.full) { this.h.msg('Un cerchio non ha un angolo: selezionare un arco o due linee.'); return; }
+        this.geo = { a: cv.c, b: arcStart(cv), c: arcEnd(cv) };
+        this.askPos();
+        return;
+      }
+      this.first = { s: cv, p };
+      this.h.setSelection([e.id]);
+      this.ask('Selezionare la seconda linea', [], undefined, 'entity');
+      return;
+    }
+    if (cv.k !== 's') { this.h.msg('Selezionare una linea.'); return; }
+    const X = lineLine(this.first.s.a, this.first.s.b, cv.a, cv.b);
+    if (!X) { this.h.msg('Le due linee sono parallele.'); return; }
+    // lato dell'angolo: l'estremo del segmento dalla parte del clic rispetto al vertice
+    const side = (s: Seg, pick: Vec): Vec | null => {
+      const q = closestOnSeg(pick, s.a, s.b).p;
+      const dir = dist(q, X.p) > 1e-6 ? sub(q, X.p) : sub(dist(s.a, X.p) > dist(s.b, X.p) ? s.a : s.b, X.p);
+      const end = dot(sub(s.a, X.p), dir) > dot(sub(s.b, X.p), dir) ? s.a : s.b;
+      return dist(end, X.p) > 1e-6 ? end : null;
+    };
+    const b = side(this.first.s, this.first.p), c = side(cv, p);
+    if (!b || !c) { this.h.msg('Linee troppo corte per quotare l\'angolo.'); return; }
+    this.geo = { a: X.p, b, c };
+    this.h.setSelection([]);
+    this.askPos();
+  }
+
+  private askPos() {
+    this.base = this.geo!.a;
+    this.ask('Specificare posizione dell\'arco di quota');
+  }
+
+  private make(p: Vec): NewEnt | null {
+    if (!this.geo || dist(p, this.geo.a) < 1e-9) return null;
+    return { t: 'dim', k: 'ang', ...this.geo, p, layer: 'QUOTE' };
+  }
+
+  point(p: Vec) {
+    const e = this.make(p);
+    if (!e) return;
+    this.h.doc.edit('Quota', () => { this.h.doc.ensureLayer('QUOTE'); this.h.doc.add(e); });
+    this.h.done();
+  }
+
+  preview(p: Vec): NewEnt[] {
+    const e = this.make(p);
+    return e ? [e] : [];
+  }
+
+  cancel() { this.h.setSelection([]); }
 }
 
 export { angleOf };

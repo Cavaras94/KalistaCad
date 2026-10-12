@@ -1,8 +1,8 @@
 // Documento: entità, layer, impostazioni, annulla/ripeti.
-import type { Ent, NewEnt, PrimCtx } from './entities';
-import { entBox } from './entities';
+import type { Ent, NewEnt, PrimCtx, Blocks } from './entities';
+import { entBox, transform } from './entities';
 import { buildWallCtx } from './walls';
-import { Box, emptyBox, boxUnion, boxValid } from './geom';
+import { Box, emptyBox, boxUnion, boxValid, v, mul, scaleAbout } from './geom';
 
 export type LineType = 'continuous' | 'dashed' | 'hidden' | 'center' | 'dashdot';
 export type Units = 'mm' | 'cm' | 'm';
@@ -30,6 +30,8 @@ export interface Settings {
   grid: number;
   snap: number;
   filletR: number;
+  chamferD1: number;
+  chamferD2: number;
   offsetD: number;
 }
 
@@ -48,12 +50,15 @@ export const LT_NAMES: Record<LineType, string> = {
   continuous: 'Continua', dashed: 'Tratteggiata', hidden: 'Nascosta', center: 'Asse', dashdot: 'Tratto-punto',
 };
 
+/** Impostazioni che sono lunghezze nelle unità del disegno. */
+const LENGTH_KEYS = ['textH', 'dimH', 'wallTh', 'doorW', 'windowW', 'hatchSp', 'grid', 'snap', 'filletR', 'offsetD', 'chamferD1', 'chamferD2'] as const;
+
 export function defaultSettings(units: Units = 'cm'): Settings {
   const k = 10 / UNIT_MM[units]; // valori pensati in cm
   return {
     units,
-    textH: 15 * k,
-    dimH: 12 * k,
+    textH: 20 * k, // 2 mm su carta a 1:100, 4 mm a 1:50
+    dimH: 15 * k,
     dimDec: units === 'm' ? 2 : 0,
     wallTh: 30 * k,
     doorW: 80 * k,
@@ -63,6 +68,8 @@ export function defaultSettings(units: Units = 'cm'): Settings {
     grid: 50 * k,
     snap: 5 * k,
     filletR: 0,
+    chamferD1: 0,
+    chamferD2: 0,
     offsetD: 10 * k,
   };
 }
@@ -85,16 +92,18 @@ export const TYPE_LAYER: Partial<Record<Ent['t'], string>> = {
   wall: 'MURI', door: 'SERRAMENTI', window: 'SERRAMENTI', dim: 'QUOTE', room: 'LOCALI', hatch: 'TRATTEGGI',
 };
 
-interface Snapshot { ents: Ent[]; layers: Layer[]; settings: Settings }
+interface Snapshot { ents: Ent[]; layers: Layer[]; settings: Settings; blocks: Blocks }
 
 export interface DocData {
-  format: 'planimetrie';
+  /** 'planimetrie' è il nome che il programma aveva prima di chiamarsi Kalista. */
+  format: 'kalista' | 'planimetrie';
   version: 1;
   ents: Ent[];
   layers: Layer[];
   current: string;
   settings: Settings;
   nextId: number;
+  blocks?: Blocks;
 }
 
 const MAX_UNDO = 100;
@@ -104,6 +113,8 @@ export class Doc {
   layers: Layer[] = defaultLayers();
   current = '0';
   settings: Settings = defaultSettings();
+  /** definizioni dei blocchi; ogni definizione si sostituisce intera, non si modifica sul posto */
+  blocks: Blocks = {};
   nextId = 1;
   /** cambia a ogni modifica: chi disegna lo usa per sapere quando ridisegnare */
   version = 0;
@@ -116,11 +127,12 @@ export class Doc {
   onChange(fn: () => void) { this.listeners.push(fn); }
 
   private snapshot(): Snapshot {
-    return { ents: this.ents.slice(), layers: this.layers.map(l => ({ ...l })), settings: { ...this.settings } };
+    return { ents: this.ents.slice(), layers: this.layers.map(l => ({ ...l })), settings: { ...this.settings }, blocks: this.blocks };
   }
 
   private restore(s: Snapshot) {
     this.ents = s.ents;
+    this.blocks = s.blocks;
     this.layers = s.layers;
     this.settings = s.settings;
     if (!this.layers.some(l => l.name === this.current)) this.current = this.layers[0].name;
@@ -216,6 +228,27 @@ export class Doc {
     return l.visible && !l.locked;
   }
 
+  /**
+   * Cambia unità tenendo ferme le misure reali: un muro di 500 cm diventa di 5 m. Riscala le
+   * coordinate, le definizioni dei blocchi e le impostazioni che sono lunghezze. Da chiamare
+   * dentro edit.
+   */
+  convertUnits(to: Units) {
+    const from = this.settings.units;
+    const f = UNIT_MM[from] / UNIT_MM[to];
+    if (f === 1) return;
+    const m = scaleAbout(v(0, 0), f);
+    // di un inserimento si sposta solo il punto: la scala la porta già la definizione del blocco
+    const conv = (e: Ent): Ent => (e.t === 'insert' ? { ...e, p: mul(e.p, f) } : transform(e, m));
+    this.ents = this.ents.map(conv);
+    this.blocks = Object.fromEntries(Object.entries(this.blocks).map(([k, d]) => [k, { ents: d.ents.map(conv) }]));
+    const s: Settings = { ...this.settings, units: to };
+    for (const k of LENGTH_KEYS) s[k] = Math.round(s[k] * f * 1e9) / 1e9;
+    if (to === 'm') s.dimDec = Math.max(s.dimDec, 2);
+    else if (from === 'm' && s.dimDec === 2) s.dimDec = 0;
+    this.settings = s;
+  }
+
   // -- contesto di rappresentazione
 
   ctx(): PrimCtx {
@@ -225,6 +258,7 @@ export class Doc {
       dimDec: this.settings.dimDec,
       areaDiv: (1000 / UNIT_MM[this.settings.units]) ** 2,
       walls: buildWallCtx(this.ents),
+      blocks: this.blocks,
     };
     this.ctxCache = { version: this.version, ctx };
     return ctx;
@@ -245,14 +279,16 @@ export class Doc {
 
   toData(): DocData {
     return {
-      format: 'planimetrie', version: 1, ents: this.ents, layers: this.layers,
+      format: 'kalista', version: 1, ents: this.ents, layers: this.layers,
       current: this.current, settings: this.settings, nextId: this.nextId,
+      ...(Object.keys(this.blocks).length ? { blocks: this.blocks } : {}),
     };
   }
 
   load(d: DocData) {
-    if (d.format !== 'planimetrie') throw new Error('Il file non è un disegno di Planimetrie');
+    if (d.format !== 'kalista' && d.format !== 'planimetrie') throw new Error('Il file non è un disegno di Kalista');
     this.ents = d.ents ?? [];
+    this.blocks = d.blocks ?? {};
     this.layers = d.layers?.length ? d.layers : defaultLayers();
     this.settings = { ...defaultSettings(d.settings?.units ?? 'cm'), ...d.settings };
     this.current = this.layers.some(l => l.name === d.current) ? d.current : this.layers[0].name;
@@ -265,6 +301,7 @@ export class Doc {
 
   reset(units: Units = 'cm') {
     this.ents = [];
+    this.blocks = {};
     this.layers = defaultLayers();
     this.current = '0';
     this.settings = defaultSettings(units);

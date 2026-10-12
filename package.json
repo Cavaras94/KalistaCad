@@ -1,14 +1,16 @@
 {
-  "name": "planimetrie",
-  "version": "0.1.0",
-  "description": "Disegno 2D di planimetrie con stampa in scala",
+  "name": "kalista",
+  "version": "0.2.0",
+  "description": "Kalista: disegno 2D di planimetrie con stampa in scala",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "e2e": "node test/e2e.mjs"
+    "e2e": "node test/e2e.mjs",
+    "chiavetta": "node scripts/chiavetta.mjs",
+    "e2e:chiavetta": "node scripts/chiavetta.mjs && node test/chiavetta.mjs"
   },
   "license": "UNLICENSED",
   "type": "module",
