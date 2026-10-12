@@ -130,9 +130,7 @@ class Builder {
   walk(list: RawEnt[], m: Mat, parentLayer: string | null, parentColor: string | undefined, depth: number, g: number | undefined) {
     for (const e of list) {
       const layer = parentLayer && (e.layer === '0' || !e.layer) ? parentLayer : e.layer || '0';
-      let color = this.colorOf(e, parentColor);
-      if (color === undefined && parentLayer && (e.layer === '0' || !e.layer)) color = parentColor;
-      this.one(e, m, layer, color, depth, g);
+      this.one(e, m, layer, this.colorOf(e, parentColor), depth, g);
     }
   }
 
@@ -151,7 +149,16 @@ class Builder {
         if (dist(e.a, e.b) > 0) this.push({ ...base, t: 'line', a: P(e.a), b: P(e.b) }, g);
         break;
       case 'POLY': {
-        const pts = e.pts.filter((q, i, a) => i === 0 || dist(q, a[i - 1]) > 1e-12);
+        // vertici doppi: si tiene il primo, ma con la curvatura del secondo (è quella del tratto che segue)
+        const pts: typeof e.pts = [];
+        for (const q of e.pts) {
+          const last = pts[pts.length - 1];
+          if (last && dist(q, last) <= 1e-12) {
+            if (Math.abs(q.bulge ?? 0) > 1e-9) pts[pts.length - 1] = { ...last, bulge: q.bulge };
+            continue;
+          }
+          pts.push(q);
+        }
         if (pts.length < 2) break;
         if (e.closed && pts.length > 2 && dist(pts[0], pts[pts.length - 1]) < 1e-12) pts.pop();
         const hasBulge = pts.some(q => Math.abs(q.bulge ?? 0) > 1e-9);
@@ -272,10 +279,12 @@ function tessBulges(pts: (Vec & { bulge?: number })[], closed: boolean): Vec[] {
 export function rescaleImport(r: ImportResult, src: Units, docUnits: Units): ImportResult {
   const scale = UNIT_MM[src] / UNIT_MM[docUnits];
   const f = scale / r.scale;
-  if (Math.abs(f - 1) < 1e-12) return { ...r, srcUnits: src, scale };
+  // l'unità ora l'ha scelta chi importa: l'avviso sul file che non la dichiara non serve più
+  const warnings = r.warnings.filter(w => !w.includes('non dichiara le unità'));
+  if (Math.abs(f - 1) < 1e-12) return { ...r, warnings, srcUnits: src, scale };
   const m = scaleAbout(v(0, 0), f);
   const ents = r.ents.map(e => { const { id: _id, ...rest } = transform({ ...e, id: 0 } as Ent, m); return rest as NewEnt; });
-  return { ...r, ents, srcUnits: src, scale };
+  return { ...r, ents, warnings, srcUnits: src, scale };
 }
 
 /** Larghezza e altezza del disegno importato, nelle unità del file. */
@@ -352,15 +361,53 @@ function mtextAlign(ap: number | undefined): { ha: HAlign; va: VAlign } {
   return { ha: col === 0 ? 'l' : col === 1 ? 'c' : 'r', va: row === 0 ? 't' : row === 1 ? 'm' : 'b' };
 }
 
+/** Testo di TEXT e ATTRIB: solo i codi %% e \U+, senza i codici di formato che valgono per MTEXT. */
+export function cleanText(s: string): string {
+  return s
+    .replace(/\\U\+([0-9A-Fa-f]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/%%[cC]/g, 'Ø').replace(/%%[dD]/g, '°').replace(/%%[pP]/g, '±').replace(/%%%/g, '%')
+    .replace(/%%[uUoO]/g, '');
+}
+
+/**
+ * Archi, cerchi, polilinee e blocchi con la normale verso -Z (tipici dopo aver esploso un blocco
+ * specchiato) hanno le coordinate in un sistema con la X rovesciata: qui si riportano dritte.
+ */
+function unflip(e: RawEnt): RawEnt {
+  const fx = (p: Vec): Vec => v(-p.x, p.y);
+  switch (e.type) {
+    case 'POLY': return { ...e, pts: e.pts.map(q => ({ x: -q.x, y: q.y, bulge: -(q.bulge ?? 0) })) };
+    case 'CIRCLE': return { ...e, c: fx(e.c) };
+    case 'ARC': return { ...e, c: fx(e.c), a0: Math.PI - e.a1, a1: Math.PI - e.a0 };
+    case 'SOLID': return { ...e, pts: e.pts.map(fx) };
+    case 'INSERT': return { ...e, p: fx(e.p), sx: -e.sx, rot: -e.rot };
+    default: return e;
+  }
+}
+
+/** Nomi (di layer) con i caratteri oltre l'ASCII scritti come \U+XXXX. */
+const uni = (s: string): string => s.replace(/\\U\+([0-9A-Fa-f]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+
+const negZ = (e: AnyObj): boolean => (e.extrusionDirectionZ ?? e.extrusionDirection?.z ?? 1) < 0;
+
 function common(e: AnyObj): RawBase {
-  const out: RawBase = { layer: String(e.layer ?? '0') };
-  if (typeof e.colorIndex === 'number') out.colorIndex = e.colorIndex;
-  else if (typeof e.color === 'number') out.trueColor = e.color;
+  const out: RawBase = { layer: uni(String(e.layer ?? '0')) };
+  // con il colore vero (gruppo 420) c'è quasi sempre anche un indice approssimato: vince il colore vero
+  const ci = typeof e.colorIndex === 'number' ? e.colorIndex : undefined;
+  const isTrue = typeof e.color === 'number' && (ci === undefined || (ci > 0 && ci < 256 && rgbIntToHex(e.color) !== aciToHex(ci)));
+  if (isTrue) out.trueColor = e.color;
+  else if (ci !== undefined) out.colorIndex = ci;
   if (e.lineType) out.lineType = e.lineType;
   return out;
 }
 
 function fromDxfEntity(e: AnyObj, out: RawEnt[], skip: (t: string) => void) {
+  const first = out.length;
+  dxfEntity(e, out, skip);
+  if (negZ(e)) for (let i = first; i < out.length; i++) out[i] = unflip(out[i]);
+}
+
+function dxfEntity(e: AnyObj, out: RawEnt[], skip: (t: string) => void) {
   const c = common(e);
   switch (e.type) {
     case 'LINE': out.push({ ...c, type: 'LINE', a: P2(e.vertices?.[0]), b: P2(e.vertices?.[1]) }); break;
@@ -374,8 +421,9 @@ function fromDxfEntity(e: AnyObj, out: RawEnt[], skip: (t: string) => void) {
     case 'SPLINE': out.push({ ...c, type: 'SPLINE', ctrl: (e.controlPoints ?? []).map(P2), fit: (e.fitPoints ?? []).map(P2), degree: e.degreeOfSplineCurve ?? 3, knots: e.knotValues ?? [], closed: !!e.closed }); break;
     case 'TEXT': {
       const al = textAlign(e.halign, e.valign);
-      const useEnd = (e.halign || e.valign) && e.endPoint;
-      out.push({ ...c, type: 'TEXT', p: P2(useEnd ? e.endPoint : e.startPoint), s: cleanMText(String(e.text ?? '')), h: e.textHeight ?? 1, rot: (e.rotation ?? 0) * DEG, ...al });
+      // con Allinea (3) e Adatta (5) il secondo punto è la fine del testo, non l'ancoraggio
+      const useEnd = e.endPoint && (e.valign || [1, 2, 4].includes(e.halign));
+      out.push({ ...c, type: 'TEXT', p: P2(useEnd ? e.endPoint : e.startPoint), s: cleanText(String(e.text ?? '')), h: e.textHeight ?? 1, rot: (e.rotation ?? 0) * DEG, ...al });
       break;
     }
     case 'MTEXT': {
@@ -411,7 +459,7 @@ export function fromDxfParser(dxf: AnyObj): { drawing: RawDrawing; skipped: Map<
     blocks.set(name, { base: P2(b.position), ents: list });
   }
   const layers: RawLayer[] = Object.values<AnyObj>(dxf.tables?.layer?.layers ?? {}).map(l => ({
-    name: String(l.name), colorIndex: l.colorIndex, off: l.visible === false, frozen: !!l.frozen, lineType: l.lineType,
+    name: uni(String(l.name)), colorIndex: l.colorIndex, off: l.visible === false, frozen: !!l.frozen, lineType: l.lineType,
   }));
   const insUnits = dxf.header?.$INSUNITS;
   return { drawing: { ents, blocks, layers, insUnits: typeof insUnits === 'number' && insUnits > 0 ? insUnits : undefined }, skipped };
@@ -448,7 +496,8 @@ function hatchLoops(e: AnyObj): Vec[][] {
       }
       if (ed.lengthOfMinorAxis !== undefined) {
         const c = P2(ed.center), maj = P2(ed.end);
-        const R = len(maj), ratio = R ? ed.lengthOfMinorAxis / R : 1;
+        // libredwg-web mette qui il rapporto fra gli assi, non una lunghezza
+        const R = len(maj), ratio = ed.lengthOfMinorAxis;
         const rot = Math.atan2(maj.y, maj.x);
         const ccw = ed.isCCW !== false;
         const sw = ccw ? sweep(ed.startAngle, ed.endAngle) : -sweep(ed.endAngle, ed.startAngle);
@@ -467,6 +516,12 @@ function hatchLoops(e: AnyObj): Vec[][] {
 }
 
 function fromDwgEntity(e: AnyObj, out: RawEnt[], skip: (t: string) => void) {
+  const first = out.length;
+  dwgEntity(e, out, skip);
+  if (negZ(e)) for (let i = first; i < out.length; i++) out[i] = unflip(out[i]);
+}
+
+function dwgEntity(e: AnyObj, out: RawEnt[], skip: (t: string) => void) {
   const c = dwgCommon(e);
   switch (e.type) {
     case 'LINE': out.push({ ...c, type: 'LINE', a: P2(e.startPoint), b: P2(e.endPoint) }); break;
@@ -482,9 +537,11 @@ function fromDwgEntity(e: AnyObj, out: RawEnt[], skip: (t: string) => void) {
     case 'SPLINE': out.push({ ...c, type: 'SPLINE', ctrl: (e.controlPoints ?? []).map(P2), fit: (e.fitPoints ?? []).map(P2), degree: e.degree ?? 3, knots: e.knots ?? [], weights: e.weights, closed: !!((e.flag ?? 0) & 1) }); break;
     case 'TEXT': case 'ATTRIB': {
       if (e.type === 'ATTRIB' && (e.flags ?? 0) & 1) break;
-      const al = textAlign(e.halign, e.valign);
-      const useEnd = (e.halign || e.valign) && e.endPoint;
-      out.push({ ...c, type: 'TEXT', p: P2(useEnd ? e.endPoint : e.startPoint), s: cleanMText(String(e.text ?? '')), h: e.textHeight ?? 1, rot: e.rotation ?? 0, ...al });
+      // negli ATTRIB di libredwg-web i dati del testo stanno dentro e.text
+      const t: AnyObj = e.text && typeof e.text === 'object' ? e.text : e;
+      const al = textAlign(t.halign, t.valign);
+      const useEnd = t.endPoint && (t.valign || [1, 2, 4].includes(t.halign));
+      out.push({ ...c, type: 'TEXT', p: P2(useEnd ? t.endPoint : t.startPoint), s: cleanText(String(t.text ?? '')), h: t.textHeight ?? 1, rot: t.rotation ?? 0, ...al });
       break;
     }
     case 'MTEXT': {
@@ -532,7 +589,12 @@ export function fromDwgDatabase(db: AnyObj): { drawing: RawDrawing; skipped: Map
   const skipped = new Map<string, number>();
   const skip = (t: string) => skipped.set(t, (skipped.get(t) ?? 0) + 1);
   const ents: RawEnt[] = [];
-  for (const e of db.entities ?? []) if (!e.isInPaperSpace) fromDwgEntity(e, ents, skip);
+  // Solo lo spazio modello: db.entities contiene anche i layout di stampa (cartigli, squadrature) e
+  // ripete gli attributi dei blocchi, che arrivano già dal loro inserimento.
+  const records: AnyObj[] = db.tables?.BLOCK_RECORD?.entries ?? [];
+  const model = records.find(b => /^\*MODEL_SPACE$/i.test(String(b.name)));
+  const top: AnyObj[] = model?.entities ?? (db.entities ?? []).filter((e: AnyObj) => !e.isInPaperSpace);
+  for (const e of top) if (e.type !== 'ATTRIB') fromDwgEntity(e, ents, skip);
   const blocks = new Map<string, RawBlock>();
   for (const b of db.tables?.BLOCK_RECORD?.entries ?? []) {
     if (/^\*(MODEL|PAPER)_SPACE/i.test(b.name)) continue;

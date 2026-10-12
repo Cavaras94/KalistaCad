@@ -18,6 +18,25 @@ function merge(a: Map<string, number>, b: Map<string, number>): Map<string, numb
   return out;
 }
 
+/** Tipi di entità che dxf-parser sa leggere; gli altri li scarta senza dirlo. */
+const DXF_READ = new Set(['3DFACE', 'ARC', 'ATTDEF', 'CIRCLE', 'DIMENSION', 'ELLIPSE', 'INSERT', 'LINE', 'LWPOLYLINE', 'MTEXT', 'POINT', 'POLYLINE', 'SOLID', 'SPLINE', 'TEXT', 'VERTEX', 'SEQEND', 'BLOCK', 'ENDBLK', 'ENDSEC', 'VIEWPORT']);
+
+/** Conta nel testo del DXF le entità dei tipi non letti, per poterle elencare fra i "non importati". */
+export function unreadDxfTypes(text: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const lines = text.split(/\r?\n/);
+  let section = '', expectName = false;
+  for (let i = 0; i + 1 < lines.length; i += 2) {
+    const code = lines[i].trim(), val = lines[i + 1].trim();
+    if (expectName) { if (code === '2') section = val; expectName = false; continue; }
+    if (code !== '0') continue;
+    if (val === 'SECTION') { expectName = true; continue; }
+    if (val === 'ENDSEC') { section = ''; continue; }
+    if ((section === 'ENTITIES' || section === 'BLOCKS') && !DXF_READ.has(val)) out.set(val, (out.get(val) ?? 0) + 1);
+  }
+  return out;
+}
+
 export function importDxf(buf: ArrayBuffer, docUnits: Units): ImportResult {
   const text = decodeText(buf);
   if (/^AC10\d\d/.test(text.slice(0, 6)) || text.startsWith('AutoCAD Binary DXF')) {
@@ -27,7 +46,7 @@ export function importDxf(buf: ArrayBuffer, docUnits: Units): ImportResult {
   if (!parsed) throw new Error('File DXF non leggibile.');
   const { drawing, skipped } = fromDxfParser(parsed);
   const r = buildImport(drawing, docUnits);
-  return { ...r, skipped: merge(skipped, r.skipped) };
+  return { ...r, skipped: merge(merge(skipped, r.skipped), unreadDxfTypes(text)) };
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */

@@ -84,54 +84,62 @@ function traceFace(segs: S[], p: Vec): Vec[] | null {
     adj.get(j)!.add(i);
     edges.push([i, j]);
   }
-  // spigolo di partenza: il primo colpito da un raggio verso +x
-  let best: { i: number; j: number; t: number } | null = null;
+  // Spigoli colpiti da un raggio verso +x, dal più vicino. Il primo può appartenere a un oggetto isolato
+  // dentro la stanza (un mobile, una linea): in quel caso il giro non racchiude il punto e si prova il successivo.
+  const hits: { i: number; j: number; t: number }[] = [];
   for (const [i, j] of edges) {
     const a = verts[i], b = verts[j];
     if ((a.y > p.y) === (b.y > p.y)) continue;
     const x = a.x + ((p.y - a.y) * (b.x - a.x)) / (b.y - a.y);
     if (x <= p.x) continue;
-    if (!best || x - p.x < best.t) best = { i, j, t: x - p.x };
+    hits.push({ i, j, t: x - p.x });
   }
-  if (!best) return null;
-  let [u, w] = cross(sub(verts[best.j], verts[best.i]), sub(p, verts[best.i])) > 0 ? [best.i, best.j] : [best.j, best.i];
-  const start: [number, number] = [u, w];
-  const loop: number[] = [u];
-  for (let guard = 0; guard < edges.length * 2 + 10; guard++) {
-    // il prossimo spigolo è il primo in senso orario a partire da quello di ritorno
-    const back = Math.atan2(verts[u].y - verts[w].y, verts[u].x - verts[w].x);
-    let next = -1, bestRot = Infinity;
-    for (const k of adj.get(w) ?? []) {
-      if (k === u && (adj.get(w)?.size ?? 0) > 1) continue;
-      const ang = Math.atan2(verts[k].y - verts[w].y, verts[k].x - verts[w].x);
-      let rot = back - ang;
-      while (rot <= 1e-12) rot += Math.PI * 2;
-      while (rot > Math.PI * 2 + 1e-12) rot -= Math.PI * 2;
-      if (rot < bestRot) { bestRot = rot; next = k; }
+  hits.sort((a, b) => a.t - b.t);
+  const trace = (best: { i: number; j: number }): Vec[] | null => {
+    let [u, w] = cross(sub(verts[best.j], verts[best.i]), sub(p, verts[best.i])) > 0 ? [best.i, best.j] : [best.j, best.i];
+    const start: [number, number] = [u, w];
+    const loop: number[] = [u];
+    for (let guard = 0; guard < edges.length * 2 + 10; guard++) {
+      // il prossimo spigolo è il primo in senso orario a partire da quello di ritorno
+      const back = Math.atan2(verts[u].y - verts[w].y, verts[u].x - verts[w].x);
+      let next = -1, bestRot = Infinity;
+      for (const k of adj.get(w) ?? []) {
+        if (k === u && (adj.get(w)?.size ?? 0) > 1) continue;
+        const ang = Math.atan2(verts[k].y - verts[w].y, verts[k].x - verts[w].x);
+        let rot = back - ang;
+        while (rot <= 1e-12) rot += Math.PI * 2;
+        while (rot > Math.PI * 2 + 1e-12) rot -= Math.PI * 2;
+        if (rot < bestRot) { bestRot = rot; next = k; }
+      }
+      if (next < 0) return null;
+      u = w; w = next;
+      if (u === start[0] && w === start[1]) break;
+      loop.push(u);
     }
-    if (next < 0) return null;
-    u = w; w = next;
-    if (u === start[0] && w === start[1]) break;
-    loop.push(u);
-  }
-  if (u !== start[0] || w !== start[1]) return null;
-  let pts = loop.map(i => verts[i]);
-  // via le "punte" (andata e ritorno lungo uno spigolo isolato) e i vertici allineati
-  let changed = true;
-  while (changed && pts.length > 3) {
-    changed = false;
-    for (let i = 0; i < pts.length; i++) {
-      const a = pts[(i - 1 + pts.length) % pts.length], b = pts[i], c = pts[(i + 1) % pts.length];
-      if (dist(a, c) < 1e-9 || Math.abs(cross(sub(b, a), sub(c, b))) < 1e-9 * Math.max(1, dist(a, b) * dist(b, c))) {
-        if (dist(a, c) < 1e-9) pts.splice(i, 1);
-        pts.splice(i % pts.length, 1);
-        changed = true;
-        break;
+    if (u !== start[0] || w !== start[1]) return null;
+    let pts = loop.map(i => verts[i]);
+    // via le "punte" (andata e ritorno lungo uno spigolo isolato) e i vertici allineati
+    let changed = true;
+    while (changed && pts.length > 3) {
+      changed = false;
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[(i - 1 + pts.length) % pts.length], b = pts[i], c = pts[(i + 1) % pts.length];
+        if (dist(a, c) < 1e-9 || Math.abs(cross(sub(b, a), sub(c, b))) < 1e-9 * Math.max(1, dist(a, b) * dist(b, c))) {
+          if (dist(a, c) < 1e-9) pts.splice(i, 1);
+          pts.splice(i % pts.length, 1);
+          changed = true;
+          break;
+        }
       }
     }
+    if (pts.length < 3 || polygonArea(pts) <= 0 || !pointInPolygon(p, pts)) return null;
+    return pts;
+  };
+  for (const h of hits.slice(0, 64)) {
+    const loop = trace(h);
+    if (loop) return loop;
   }
-  if (pts.length < 3 || polygonArea(pts) <= 0 || !pointInPolygon(p, pts)) return null;
-  return pts;
+  return null;
 }
 
 /** Contorno chiuso attorno a p. Cerca in un'area via via più grande. */

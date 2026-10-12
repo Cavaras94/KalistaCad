@@ -32,7 +32,8 @@ export class WallTool extends Tool {
 
   option(k: string) {
     if (this.sub === 'just') { WallTool.just = k as Just; this.sub = ''; this.prompt(); return; }
-    if (k === 'S') { this.sub = 'th'; this.numberAsText = true; this.ask('Spessore del muro', [], fmtLen(this.h.doc.settings.wallTh)); }
+    // richiesta solo numerica: un clic qui non deve aggiungere un vertice
+    if (k === 'S') { this.sub = 'th'; this.ask('Spessore del muro', [], fmtLen(this.h.doc.settings.wallTh), 'none'); }
     else if (k === 'G') { this.sub = 'just'; this.ask('Giustificazione', [O('C', 'Centro'), O('S', 'Sinistra'), O('D', 'Destra')], undefined, 'none'); }
     else if (k === 'C') this.commit(true);
     else if (k === 'A') {
@@ -110,7 +111,7 @@ abstract class OpeningTool extends Tool {
   }
 
   option(k: string) {
-    if (k === 'L') { this.sub = 'w'; this.numberAsText = true; this.ask('Larghezza del vano', [], fmtLen(this.width)); }
+    if (k === 'L') { this.sub = 'w'; this.ask('Larghezza del vano', [], fmtLen(this.width), 'none'); }
   }
 
   private axis(w: WallE) {
@@ -171,8 +172,14 @@ abstract class OpeningTool extends Tool {
   }
 
   enter() {
+    if (this.sub) {
+      // Invio alla richiesta della larghezza: resta quella proposta e si torna dov'eravamo
+      this.sub = '';
+      if (this.wall) { this.numberAsText = true; this.ask('Specificare verso o distanza dallo spigolo più vicino', [O('L', 'Larghezza')]); }
+      else this.start();
+      return;
+    }
     if (this.wall) { this.place(); return; }
-    if (this.sub) { this.sub = ''; this.start(); return; }
     this.h.done();
   }
 
@@ -527,6 +534,8 @@ export class DimAngularTool extends Tool {
     const e = this.make(p);
     return e ? [e] : [];
   }
+
+  enter() { this.h.setSelection([]); this.h.done(); }
 
   cancel() { this.h.setSelection([]); }
 }

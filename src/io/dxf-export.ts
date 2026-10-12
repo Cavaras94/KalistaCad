@@ -23,7 +23,8 @@ function enc(s: string): string {
 }
 
 function layerName(n: string): string {
-  return enc(n).replace(/[<>/\\":;?*|=`]/g, '_') || '0';
+  // prima i caratteri vietati, poi la codifica: altrimenti la barra di \U+XXXX verrebbe sostituita anche lei
+  return enc(n.replace(/[<>/\\":;?*|=`]/g, '_')) || '0';
 }
 
 class W {
@@ -115,6 +116,13 @@ function writePrim(w: W, e: Ent, p: Prim) {
   switch (p.k) {
     case 'pl': {
       if (p.stroke === false && p.fill !== 'solid') return;
+      if (p.fill === 'solid' && p.closed && (p.pts.length === 3 || p.pts.length === 4)) {
+        // triangoli e quadrilateri pieni (frecce delle quote) come SOLID, che ha i vertici nell'ordine 1,2,4,3
+        const q = p.pts.length === 3 ? [p.pts[0], p.pts[1], p.pts[2], p.pts[2]] : [p.pts[0], p.pts[1], p.pts[3], p.pts[2]];
+        head(w, 'SOLID', e);
+        q.forEach((pt, i) => { w.g(10 + i, pt.x); w.g(20 + i, pt.y); w.g(30 + i, 0); });
+        return;
+      }
       if (p.pts.length === 2 && !p.closed) {
         head(w, 'LINE', e);
         w.g(10, p.pts[0].x); w.g(20, p.pts[0].y); w.g(30, 0); w.g(11, p.pts[1].x); w.g(21, p.pts[1].y); w.g(31, 0);

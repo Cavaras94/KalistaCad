@@ -190,6 +190,16 @@ export class Doc {
     return out;
   }
 
+  /** Come addMany, per le copie: i gruppi delle copie sono nuovi, non quelli degli originali. */
+  addCopies(list: NewEnt[]): Ent[] {
+    const groups = new Map<number, number>();
+    return this.addMany(list.map(e => {
+      if (e.g === undefined) return e;
+      if (!groups.has(e.g)) groups.set(e.g, this.newGroupId());
+      return { ...e, g: groups.get(e.g) };
+    }));
+  }
+
   replace(updated: Ent[]) {
     const m = new Map(updated.map(e => [e.id, e]));
     this.ents = this.ents.map(e => m.get(e.id) ?? e);
@@ -292,7 +302,10 @@ export class Doc {
     this.layers = d.layers?.length ? d.layers : defaultLayers();
     this.settings = { ...defaultSettings(d.settings?.units ?? 'cm'), ...d.settings };
     this.current = this.layers.some(l => l.name === d.current) ? d.current : this.layers[0].name;
-    this.nextId = Math.max(d.nextId ?? 1, ...this.ents.map(e => e.id + 1), 1);
+    // un ciclo, non Math.max(...): con centinaia di migliaia di entità gli argomenti non starebbero nello stack
+    let next = Math.max(d.nextId ?? 1, 1);
+    for (const e of this.ents) if (e.id >= next) next = e.id + 1;
+    this.nextId = next;
     this.undoStack = [];
     this.redoStack = [];
     this.changed();

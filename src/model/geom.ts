@@ -39,7 +39,9 @@ export function sweep(a0: number, a1: number): number {
 
 /** L'angolo a cade nell'arco CCW da a0 ad a1. */
 export function angInArc(a: number, a0: number, a1: number, eps = 1e-9): boolean {
-  return normAng(a - a0) <= sweep(a0, a1) + eps;
+  // la tolleranza vale da tutte e due le parti: un angolo un soffio prima di a0 diventa quasi 2π
+  const d = normAng(a - a0);
+  return d <= sweep(a0, a1) + eps || d >= TAU - eps;
 }
 
 // ---------------------------------------------------------------- curve
@@ -150,7 +152,8 @@ export function lineCircle(p1: Vec, p2: Vec, c: Vec, r: number): number[] {
   const B = 2 * dot(f, d);
   const C = dot(f, f) - r * r;
   let disc = B * B - 4 * A * C;
-  if (disc < -1e-9 * Math.max(1, B * B)) return [];
+  // tolleranza relativa alle grandezze in gioco: una soglia fissa vedrebbe tangenze false nei disegni in metri
+  if (disc < -1e-9 * (B * B + 4 * A * r * r)) return [];
   if (disc < 0) disc = 0;
   const s = Math.sqrt(disc);
   if (s < 1e-12) return [-B / (2 * A)];
@@ -238,8 +241,12 @@ export function clipLineToLoops(p: Vec, dir: Vec, loops: Vec[][]): [Vec, Vec][] 
   for (const loop of loops) {
     for (let i = 0, n = loop.length; i < n; i++) {
       const a = loop[i], b = loop[(i + 1) % n];
+      // il lato conta se i suoi estremi stanno da parti opposte della retta: così un vertice che cade
+      // proprio sulla retta è contato una volta sola, e non zero o due per gli arrotondamenti
+      const sa = cross(dir, sub(a, p)), sb = cross(dir, sub(b, p));
+      if ((sa > 0) === (sb > 0)) continue;
       const r = lineLine(p, q, a, b);
-      if (r && r.u >= 0 && r.u < 1) ts.push(r.t);
+      if (r) ts.push(r.t);
     }
   }
   ts.sort((x, y) => x - y);

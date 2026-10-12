@@ -12,7 +12,8 @@ const baseOf = (e: Ent): Base => ({ layer: e.layer, ...(e.color ? { color: e.col
 
 // ---------------------------------------------------------------- offset
 
-export function offsetPolyPts(pts: Vec[], closed: boolean, off: number): Vec[] | null {
+/** strict: null anche quando la distanza è troppa e un tratto uscirebbe rovesciato. */
+export function offsetPolyPts(pts: Vec[], closed: boolean, off: number, strict = false): Vec[] | null {
   const n = pts.length;
   const m = closed ? n : n - 1;
   const lines: [Vec, Vec][] = [];
@@ -30,6 +31,9 @@ export function offsetPolyPts(pts: Vec[], closed: boolean, off: number): Vec[] |
     const L1 = lines[(i - 1 + m) % m], L2 = lines[i % m];
     const r = lineLine(L1[0], L1[1], L2[0], L2[1]);
     out.push(r ? r.p : L2[0]);
+  }
+  if (strict) {
+    for (let i = 0; i < m; i++) if (dot(sub(out[(i + 1) % n], out[i]), sub(pts[(i + 1) % n], pts[i])) <= 0) return null;
   }
   return out;
 }
@@ -135,7 +139,7 @@ export function offsetEnt(e: Ent, d: number, side: Vec): NewEnt | null {
       }
       const a = e.pts[best], c = e.pts[(best + 1) % e.pts.length];
       const s = cross(sub(c, a), sub(side, a)) >= 0 ? 1 : -1;
-      const pts = offsetPolyPts(e.pts, e.closed, s * d);
+      const pts = offsetPolyPts(e.pts, e.closed, s * d, true);
       return pts ? { ...b, t: 'poly', pts, closed: e.closed } : null;
     }
     default: return null;
@@ -267,6 +271,7 @@ function polyPiece(e: PolyE, t0: number, t1: number): NewEnt | null {
 export function boundaryCurves(ents: readonly Ent[], ctx: PrimCtx = DEFAULT_CTX): Curve[] {
   const out: Curve[] = [];
   for (const e of ents) {
+    if (e.t === 'hatch') continue; // le righe di un tratteggio non sono bordi
     const ps = prims(e, ctx).filter(p => p.k !== 'text' && !(p.k === 'pl' && p.stroke === false) && p.k !== 'area');
     out.push(...primCurves(ps));
   }
@@ -332,7 +337,6 @@ export function trimEnt(e: Ent, cutters: Curve[], pick: Vec): NewEnt[] | null {
 // ---------------------------------------------------------------- estendi
 
 export function extendEnt(e: Ent, bounds: Curve[], pick: Vec): NewEnt | null {
-  const b = baseOf(e);
   const extendSeg = (a: Vec, c: Vec, fromEnd: boolean): Vec | null => {
     // estende il segmento a→c dalla parte di c (fromEnd) o di a
     let best: number | null = null;
@@ -364,7 +368,7 @@ export function extendEnt(e: Ent, bounds: Curve[], pick: Vec): NewEnt | null {
         }
       }
       if (best === null) return null;
-      return atEnd ? { ...b, t: 'arc', c: e.c, r: e.r, a0: e.a0, a1: e.a1 + best } : { ...b, t: 'arc', c: e.c, r: e.r, a0: e.a0 - best, a1: e.a1 };
+      return atEnd ? { ...e, a1: e.a1 + best } : { ...e, a0: e.a0 - best };
     }
     case 'poly': {
       if (e.closed || e.pts.length < 2) return null;
@@ -406,6 +410,9 @@ export function fillet(e1: Straight, p1: Vec, e2: Straight, p2: Vec, r: number):
   const phi = Math.acos(cosA) / 2;
   if (phi < 1e-6 || phi > Math.PI / 2 - 1e-6) return null;
   const dt = r / Math.tan(phi);
+  // raggio troppo grande: il punto di tangenza cadrebbe oltre la fine di una delle due linee
+  const keptEnd = (e: Straight, pick: Vec): Vec => (localT(seg(e.a, e.b), pick) < localT(seg(e.a, e.b), X.p) ? e.a : e.b);
+  if (dist(X.p, keptEnd(e1, p1)) <= dt + 1e-9 || dist(X.p, keptEnd(e2, p2)) <= dt + 1e-9) return null;
   const T1 = add(X.p, mul(d1, dt)), T2 = add(X.p, mul(d2, dt));
   const bis = norm(add(d1, d2));
   const c = add(X.p, mul(bis, r / Math.sin(phi)));
@@ -509,7 +516,8 @@ export function joinEnts(ents: Ent[], eps = 1e-6): { poly: NewEnt; used: number[
   }
   if (used.length < 2) return null;
   let pts = chain.pts, bulges = chain.bulges;
-  const closed = pts.length > 3 && same(pts[0], pts[pts.length - 1], eps);
+  // anche due soli pezzi chiudono un contorno, purché non siano due linee sovrapposte (una "D", due semicerchi)
+  const closed = same(pts[0], pts[pts.length - 1], eps) && (pts.length > 3 || (pts.length === 3 && bulges.some(b => Math.abs(b) > 1e-9)));
   if (closed) pts = pts.slice(0, -1);
   else bulges = bulges.slice(0, pts.length - 1);
   const first = ents.find(e => e.id === used[0])!;

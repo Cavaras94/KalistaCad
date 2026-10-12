@@ -251,6 +251,9 @@ export class SplineTool extends Tool {
 export class CircleTool extends Tool {
   readonly name = 'CERCHIO';
   static lastR = 0;
+  static lastUnits = '';
+  /** ultimo raggio usato, valido solo finché il disegno resta nelle stesse unità */
+  private get last(): number { return CircleTool.lastUnits === this.h.doc.settings.units ? CircleTool.lastR : 0; }
   private c: Vec | null = null;
   private diam = false;
   private how: 'cr' | '2p' | '3p' = 'cr';
@@ -261,12 +264,13 @@ export class CircleTool extends Tool {
   option(k: string) {
     if (k === '3P') { this.how = '3p'; this.ask('Specificare primo punto sulla circonferenza'); }
     else if (k === '2P') { this.how = '2p'; this.ask('Specificare primo estremo del diametro'); }
-    else if (k === 'D') { this.diam = true; this.ask('Specificare diametro', [], CircleTool.lastR ? fmtLen(CircleTool.lastR * 2) : undefined); }
+    else if (k === 'D') { this.diam = true; this.ask('Specificare diametro', [], this.last ? fmtLen(this.last * 2) : undefined); }
   }
 
   private make(c: Vec, r: number) {
     if (r <= 1e-12) return;
     CircleTool.lastR = r;
+    CircleTool.lastUnits = this.h.doc.settings.units;
     this.h.doc.edit('Cerchio', () => { this.h.doc.add({ t: 'circle', c, r, layer: this.h.doc.current }); });
     this.h.done();
   }
@@ -277,13 +281,18 @@ export class CircleTool extends Tool {
       this.base = p;
       if (this.pts.length === 1) this.ask('Specificare secondo punto');
       else if (this.pts.length === 2) this.ask('Specificare terzo punto');
-      else { const a = arc3(this.pts[0], this.pts[1], this.pts[2]); if (a) this.make(a.c, a.r); }
+      else {
+        const a = arc3(this.pts[0], this.pts[1], this.pts[2]);
+        if (a) this.make(a.c, a.r);
+        else { this.pts.pop(); this.base = this.pts[1]; this.h.msg('I tre punti sono allineati: indicare un altro terzo punto.'); }
+      }
       return;
     }
     if (this.how === '2p') {
       this.pts.push(p);
       this.base = p;
       if (this.pts.length === 1) this.ask('Specificare secondo estremo del diametro');
+      else if (dist(this.pts[0], this.pts[1]) <= 1e-12) { this.pts.pop(); this.base = this.pts[0]; }
       else this.make(mid(this.pts[0], this.pts[1]), dist(this.pts[0], this.pts[1]) / 2);
       return;
     }
@@ -291,7 +300,7 @@ export class CircleTool extends Tool {
       this.c = p;
       this.base = p;
       this.numberAsText = true;
-      this.ask('Specificare raggio o', [O('D', 'Diametro')], CircleTool.lastR ? fmtLen(CircleTool.lastR) : undefined);
+      this.ask('Specificare raggio o', [O('D', 'Diametro')], this.last ? fmtLen(this.last) : undefined);
       return;
     }
     const d = dist(this.c, p);
@@ -306,7 +315,7 @@ export class CircleTool extends Tool {
   }
 
   enter() {
-    if (this.c && CircleTool.lastR) this.make(this.c, CircleTool.lastR);
+    if (this.c && this.last) this.make(this.c, this.last);
     else this.h.done();
   }
 
@@ -470,15 +479,13 @@ export class HatchTool extends Tool {
   readonly name = 'TRATTEGGIO';
   static pat: HatchPattern = 'ansi31';
   static ang = 0;
-  static sp = 0;
   private sub: '' | 'pat' | 'sp' | 'ang' | 'obj' = '';
   private made = 0;
 
   start() {
-    if (!HatchTool.sp) HatchTool.sp = this.h.doc.settings.hatchSp;
     this.sub = '';
     const name = HatchTool.pat === 'solid' ? 'SOLIDO' : HatchTool.pat.toUpperCase();
-    this.ask(`Specificare punto interno (${name}, passo ${fmtLen(HatchTool.sp)}) o`, [O('S', 'Selezionare oggetto'), O('P', 'Pattern'), O('PA', 'PAsso'), O('AN', 'ANgolo')]);
+    this.ask(`Specificare punto interno (${name}, passo ${fmtLen(this.h.doc.settings.hatchSp)}) o`, [O('S', 'Selezionare oggetto'), O('P', 'Pattern'), O('PA', 'PAsso'), O('AN', 'ANgolo')]);
   }
 
   option(k: string) {
@@ -489,12 +496,12 @@ export class HatchTool extends Tool {
     }
     if (k === 'S') { this.sub = 'obj'; this.ask('Selezionare polilinea chiusa, cerchio o locale', [], undefined, 'entity'); }
     else if (k === 'P') { this.sub = 'pat'; this.ask('Pattern', [O('SO', 'SOlido'), O('A31', 'ANSI31 (linee a 45°)'), O('A37', 'ANSI37 (incrociato)')], undefined, 'none'); }
-    else if (k === 'PA') { this.sub = 'sp'; this.numberAsText = true; this.ask('Passo fra le linee', [], fmtLen(HatchTool.sp)); }
+    else if (k === 'PA') { this.sub = 'sp'; this.numberAsText = true; this.ask('Passo fra le linee', [], fmtLen(this.h.doc.settings.hatchSp)); }
     else if (k === 'AN') { this.sub = 'ang'; this.numberAsText = true; this.ask('Angolo aggiuntivo del pattern', [], fmtLen((HatchTool.ang * 180) / Math.PI)); }
   }
 
   text(s: string): boolean {
-    if (this.sub === 'sp') { const n = parseNum(s); if (n === null || n <= 0) return false; HatchTool.sp = n; this.numberAsText = false; this.start(); return true; }
+    if (this.sub === 'sp') { const n = parseNum(s); if (n === null || n <= 0) return false; this.h.doc.settings.hatchSp = n; this.numberAsText = false; this.start(); return true; }
     if (this.sub === 'ang') { const a = parseAngle(s); if (a === null) return false; HatchTool.ang = a; this.numberAsText = false; this.start(); return true; }
     const p = PATTERNS[s.trim().toUpperCase()];
     if (p) { HatchTool.pat = p; this.start(); return true; }
@@ -503,7 +510,8 @@ export class HatchTool extends Tool {
 
   private create(loops: Vec[][]) {
     this.h.doc.edit('Tratteggio', () => {
-      this.h.doc.add({ t: 'hatch', loops, pat: HatchTool.pat, sp: HatchTool.sp, ang: HatchTool.ang, layer: 'TRATTEGGI' });
+      this.h.doc.ensureLayer('TRATTEGGI');
+      this.h.doc.add({ t: 'hatch', loops, pat: HatchTool.pat, sp: this.h.doc.settings.hatchSp, ang: HatchTool.ang, layer: 'TRATTEGGI' });
     });
     this.made++;
   }

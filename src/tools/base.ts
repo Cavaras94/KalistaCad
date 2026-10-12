@@ -52,7 +52,8 @@ export abstract class Tool {
   /** testo o numero digitato; false = non riconosciuto */
   text(_s: string): boolean { return false; }
   option(_k: string): void {}
-  enter(): void { this.h.done(); }
+  /** Invio senza altro da fare chiude il comando, senza lasciare selezionato ciò che aveva evidenziato. */
+  enter(): void { this.h.setSelection([]); this.h.done(); }
   preview(_p: Vec): NewEnt[] { return []; }
   /** entità da disegnare come "fantasma" (tratteggiate) durante il comando */
   ghosts(_p: Vec): NewEnt[] { return []; }
@@ -69,10 +70,12 @@ export abstract class Tool {
   }
 
   matchOption(s: string): string | null {
-    const u = s.trim().toUpperCase();
+    // senza badare ad accenti e maiuscole: "si" vale per "Sì"
+    const fold = (x: string) => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+    const u = fold(s.trim());
     if (!u) return null;
-    for (const o of this.options) if (o.key.toUpperCase() === u) return o.key;
-    for (const o of this.options) if (o.label.toUpperCase().startsWith(u)) return o.key;
+    for (const o of this.options) if (fold(o.key) === u) return o.key;
+    for (const o of this.options) if (fold(o.label).startsWith(u)) return o.key;
     return null;
   }
 }
@@ -97,9 +100,11 @@ export function parseAngle(s: string): number | null {
  *  x,y  assolute      @dx,dy  relative all'ultimo punto
  *  d<a  polari        @d<a    polari relative
  *  d    distanza diretta lungo la direzione del cursore (serve una base)
+ *  #x,y assolute anche dove un numero con la virgola sarebbe letto come decimale
  */
 export function parsePoint(s: string, last: Vec | null, base: Vec | null, cursor: Vec): Vec | null {
   let t = s.trim().replace(/\s+/g, '');
+  if (t.startsWith('#')) t = t.slice(1);
   if (!t) return null;
   let rel = false;
   if (t.startsWith('@')) { rel = true; t = t.slice(1); if (!t) return last; }

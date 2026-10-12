@@ -1,9 +1,9 @@
 // Applicazione: vista, input, riga di comando, file.
 import type { Ent, NewEnt, PrimCtx, SnapKind } from '../model/entities';
-import { prims, grips } from '../model/entities';
+import { prims, grips, entBox } from '../model/entities';
 import { Doc, DocData, UNIT_LABEL } from '../model/document';
 import { buildWallCtx } from '../model/walls';
-import { Vec, Box, v, dist, boxOf, sub, angleOf, len, emptyBox, boxAdd, boxValid, same } from '../model/geom';
+import { Vec, Box, v, dist, boxOf, sub, angleOf, len, emptyBox, boxUnion, boxValid, same } from '../model/geom';
 import { View } from '../view/view';
 import { renderDoc, paint, entPrims, layerDash } from '../view/render';
 import { findSnap, pickAt, pickBox, SnapResult, SnapSettings, SNAP_LABEL } from '../view/snap';
@@ -161,12 +161,16 @@ export class App implements Host {
     const def = findCommand(cmd);
     if (!def) { this.msg(`Comando sconosciuto: "${cmd}". Digitare ? per l'elenco dei comandi.`); return; }
     if (def.action) {
-      if (this.tool && !['zoomext', 'regen', 'help'].includes(def.action)) this.cancelTool(true);
+      // salvare o guardare layer e proprietà non deve far perdere il comando in corso
+      if (this.tool && !['zoomext', 'regen', 'help', 'save', 'saveas', 'dxfout', 'layer', 'properties'].includes(def.action)) this.cancelTool(true);
       this.action(def.action);
       if (!['undo', 'redo'].includes(def.action)) this.lastCmd = def.name;
       return;
     }
     if (this.tool) this.cancelTool(true);
+    // un riquadro di selezione lasciato aperto non deve chiudersi sui clic del comando
+    this.boxStart = null;
+    this.boxMoved = false;
     this.lastCmd = def.name;
     this.tool = def.make!(this);
     this.tool.start();
@@ -637,6 +641,16 @@ export class App implements Host {
 
   private onGlobalKey(e: KeyboardEvent) {
     if (document.querySelector('.modal')) return;
+    // Un menu a tendina dei pannelli che tiene il fuoco userebbe le lettere per cercare fra le voci
+    // (M sposterebbe la selezione sul layer MURI): le lettere vanno alla riga di comando.
+    if (e.target instanceof HTMLSelectElement && e.target.closest('#side') && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      e.target.blur();
+      this.input.focus({ preventScroll: true });
+      this.input.value += e.key;
+      this.input.dispatchEvent(new Event('input'));
+      return;
+    }
     if (this.isTyping(e)) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const k = e.key;
@@ -662,6 +676,8 @@ export class App implements Host {
       if (map[key]) { e.preventDefault(); this.run(map[key]); }
       return;
     }
+    // Canc vale anche con il cursore nella riga di comando, se non c'è niente da cancellare lì
+    if (k === 'Delete' && e.target === this.input && !this.input.value && !this.tool && this.selection.size) { e.preventDefault(); this.run('ERASE'); return; }
     if (e.target === this.input) return;
     if (k === 'Escape') { e.preventDefault(); this.escape(); return; }
     if (k === 'Delete' && !this.tool && this.selection.size) { e.preventDefault(); this.run('ERASE'); return; }
@@ -717,7 +733,12 @@ export class App implements Host {
       this.refresh();
       return;
     }
-    if (t.numberAsText && t.text(s)) { this.refresh(); return; }
+    if (t.numberAsText && !s.startsWith('#') && t.text(s)) {
+      // a questo passo si aspetta un numero, e la virgola è la virgola dei decimali
+      if (/^[-+]?[\d.]+,[-+]?[\d.]+$/.test(s)) this.msg(`"${s}" letto come numero con la virgola. Per indicare un punto a questo passo: un clic, oppure #x,y.`);
+      this.refresh();
+      return;
+    }
     const p = parsePoint(s, this.lastPoint, t.base, this.snap?.p ?? this.cursor);
     if (p) { this.feedPoint(p); return; }
     if (t.text(s)) { this.refresh(); return; }
@@ -786,14 +807,15 @@ export class App implements Host {
       case 'redo': { const l = doc.redo(); this.msg(l ? `Ripristinato: ${l}` : 'Niente da ripristinare.'); this.pruneSelection(); break; }
       case 'selectall': this.setSelection(doc.ents.filter(e => doc.isEditable(e)).map(e => e.id)); this.msg(`${this.selection.size} entità selezionate.`); break;
       case 'copyclip': case 'cutclip': {
-        const sel = doc.ents.filter(e => this.selection.has(e.id));
+        // tagliare toglie solo ciò che si può modificare: i layer bloccati restano dove sono
+        const sel = doc.ents.filter(e => this.selection.has(e.id) && (a === 'copyclip' || doc.isEditable(e)));
         if (!sel.length) { this.msg('Selezionare prima le entità.'); break; }
         const ctx = doc.ctx();
         let b = emptyBox();
-        for (const e of sel) for (const p of prims(e, ctx)) if (p.k === 'pl') p.pts.forEach(q => boxAdd(b, q));
+        for (const e of sel) { const eb = entBox(e, ctx); if (boxValid(eb)) b = boxUnion(b, eb); }
         if (!boxValid(b)) b = { x0: 0, y0: 0, x1: 0, y1: 0 };
         this.clipboard = { ents: sel.map(({ id: _id, ...r }) => r as NewEnt), base: v(b.x0, b.y0) };
-        if (a === 'cutclip') { doc.edit('Taglia', () => doc.remove(this.selection)); this.setSelection([]); }
+        if (a === 'cutclip') { doc.edit('Taglia', () => doc.remove(sel.map(e => e.id))); this.setSelection([]); }
         this.msg(`${sel.length} entità negli appunti. Ctrl+V per incollare.`);
         break;
       }
@@ -941,9 +963,17 @@ export class App implements Host {
   private autosaveNow() {
     try {
       const data = JSON.stringify({ name: this.fileName, doc: this.doc.toData() });
-      if (data.length < 4_500_000) localStorage.setItem(AUTOSAVE_KEY, data);
-    } catch { /* spazio esaurito o archiviazione non disponibile: il salvataggio su file resta l'unica copia */ }
+      if (data.length < 4_500_000) { localStorage.setItem(AUTOSAVE_KEY, data); return; }
+    } catch { /* spazio esaurito o archiviazione non disponibile */ }
+    // Non si è potuto salvare: via anche la copia vecchia, che al prossimo avvio verrebbe ripristinata
+    // come se fosse questo disegno.
+    try { localStorage.removeItem(AUTOSAVE_KEY); } catch { /* archiviazione non disponibile */ }
+    if (!this.autosaveWarned) {
+      this.autosaveWarned = true;
+      this.msg('Attenzione: il disegno è troppo grande per il salvataggio automatico nel browser. Salvarlo su file con Ctrl+S.');
+    }
   }
+  private autosaveWarned = false;
 
   private restore(): boolean {
     try {
@@ -966,7 +996,8 @@ export class App implements Host {
     this.doc.reset(this.doc.settings.units);
     this.fileHandle = null;
     this.fileName = 'Senza nome';
-    this.selection.clear();
+    this.setSelection([]);
+    this.printWin = null;
     this.defaultView();
     this.updateStatus();
     this.msg('Nuovo disegno.');
@@ -991,6 +1022,8 @@ export class App implements Host {
       const buf = await f.arrayBuffer();
       if (ext === 'kalista' || ext === 'planim' || ext === 'json') {
         const d = JSON.parse(new TextDecoder().decode(buf)) as DocData;
+        this.setSelection([]);
+        this.printWin = null;
         this.doc.load(d);
         this.fileHandle = null;
         this.fileName = f.name.replace(/\.(kalista|planim|json)$/i, '');
@@ -1011,6 +1044,8 @@ export class App implements Host {
         r = rescaleImport(r, src, docUnits);
       }
       if (this.pickMode === 'open') {
+        this.setSelection([]);
+        this.printWin = null;
         this.doc.reset(this.doc.settings.units);
         this.fileHandle = null;
         this.fileName = f.name.replace(/\.(dxf|dwg)$/i, '');

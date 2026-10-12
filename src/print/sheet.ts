@@ -76,7 +76,7 @@ export function fitScale(doc: Doc, o: PrintOpts): number {
   const aw = Math.max(o.area.x1 - o.area.x0, 1e-9), ah = Math.max(o.area.y1 - o.area.y0, 1e-9);
   const k = Math.min(vp.w / aw, vp.h / ah); // mm di carta per unità
   const exact = UNIT_MM[doc.settings.units] / k;
-  return STD_SCALES.find(s => s >= exact * 0.999) ?? Math.ceil(exact);
+  return STD_SCALES.find(s => s >= exact - 1e-9) ?? Math.ceil(exact);
 }
 
 export function buildSheet(doc: Doc, o: PrintOpts): Sheet {
@@ -99,7 +99,7 @@ export function buildSheet(doc: Doc, o: PrintOpts): Sheet {
     .sort((a, b) => order(a.t) - order(b.t));
 
   for (const e of ents) {
-    const l = layers.get(e.layer)!;
+    const l = layers.get(e.layer) ?? doc.layers[0];
     const color = printColor(e.color ?? l.color, o.mono);
     const lw = o.lineweights ? Math.max(0.05, l.lw) : 0.18;
     const dash = LT_PATTERNS[l.lt].map(x => x * doc.settings.ltScale);

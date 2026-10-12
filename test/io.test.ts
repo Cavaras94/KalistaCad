@@ -37,6 +37,57 @@ describe('numeri nel pannello Proprietà', () => {
   });
 });
 
+describe('import DXF: casi corretti il 12 ottobre', () => {
+  const dxf = (ents: string) => toBuf(['0', 'SECTION', '2', 'ENTITIES', ...ents.trim().split(/\s+/), '0', 'ENDSEC', '0', 'EOF'].join('\n'));
+  it('arco con la normale verso -Z: la X va rovesciata', () => {
+    const r = importDxf(dxf('0 ARC 8 0 10 10 20 0 40 5 50 0 51 90 230 -1'), 'cm');
+    const a = r.ents[0] as ArcE;
+    expect(a.c.x).toBeCloseTo(-10, 9);
+    expect(a.a0).toBeCloseTo(Math.PI / 2, 9);
+    expect(a.a1).toBeCloseTo(Math.PI, 9);
+  });
+  it('testo Adatta: resta ancorato al primo punto', () => {
+    const r = importDxf(dxf('0 TEXT 8 0 10 0 20 0 11 100 21 0 40 5 1 SOGGIORNO 72 5'), 'cm');
+    expect((r.ents[0] as TextE).p.x).toBe(0);
+  });
+  it('un TEXT semplice tiene barre rovesciate e graffe', () => {
+    const doc = new Doc();
+    doc.edit('t', () => doc.add({ t: 'text', p: v(0, 0), s: 'C:\\Lavori\\Piano {A}', h: 10, rot: 0, ha: 'l', va: 'b', layer: '0' }));
+    const r = importDxf(toBuf(exportDxf(doc)), 'cm');
+    expect((r.ents[0] as TextE).s).toBe('C:\\Lavori\\Piano {A}');
+  });
+  it('i tipi che il lettore non conosce compaiono fra i non importati', () => {
+    const r = importDxf(dxf('0 LINE 8 0 10 0 20 0 11 5 21 5 0 HATCH 8 0 0 LEADER 8 0 0 LEADER 8 0'), 'cm');
+    expect(r.skipped.get('HATCH')).toBe(1);
+    expect(r.skipped.get('LEADER')).toBe(2);
+    expect(r.ents.length).toBe(1);
+  });
+  it('vertice doppio con curvatura: l\'arco non si perde', () => {
+    const r = importDxf(dxf('0 LWPOLYLINE 8 0 90 3 70 0 10 0 20 0 10 0 20 0 42 1 10 10 20 0'), 'cm');
+    const p = r.ents[0] as PolyE;
+    expect(p.pts.length).toBe(2);
+    expect(p.bulges?.[0]).toBe(1);
+  });
+  it('nomi di layer con lettere accentate: andata e ritorno', () => {
+    const doc = new Doc();
+    doc.edit('t', () => { doc.ensureLayer('Università'); doc.add({ t: 'line', a: v(0, 0), b: v(1, 1), layer: 'Università' }); });
+    const r = importDxf(toBuf(exportDxf(doc)), 'cm');
+    expect(r.ents[0].layer).toBe('Università');
+  });
+  it('le frecce piene delle quote tornano piene', () => {
+    const doc = new Doc();
+    doc.edit('t', () => doc.add({ t: 'dim', k: 'rad', a: v(0, 0), b: v(50, 0), p: v(80, 0), layer: 'QUOTE' }));
+    const r = importDxf(toBuf(exportDxf(doc)), 'cm');
+    expect(r.ents.some(e => e.t === 'hatch' && e.pat === 'solid')).toBe(true);
+  });
+  it('un disegno con moltissime entità si riapre', () => {
+    const doc = new Doc();
+    const ents = Array.from({ length: 200000 }, (_, i) => ({ id: i + 1, layer: '0', t: 'line' as const, a: v(0, 0), b: v(1, i) }));
+    doc.load({ format: 'kalista', version: 1, ents, layers: [], current: '0', settings: doc.settings, nextId: 1 });
+    expect(doc.nextId).toBe(200001);
+  });
+});
+
 describe('unità del disegno', () => {
   const make = () => {
     const doc = new Doc();
@@ -169,28 +220,41 @@ describe('DXF', () => {
 
 describe('DWG', () => {
   it('converte un database DWG con blocchi e quote', () => {
+    // come li produce libredwg-web: le entità stanno nel record dello spazio modello, e db.entities le
+    // ripete insieme a quelle dei layout di stampa e agli attributi dei blocchi
+    const attrib = { type: 'ATTRIB', layer: 'A', flags: 0, text: { text: 'D12', startPoint: { x: 55, y: 5 }, textHeight: 3, rotation: 0 } };
+    const model = [
+      { type: 'LWPOLYLINE', layer: 'A', colorIndex: 256, flag: 0x200, vertices: [{ x: 0, y: 0, bulge: 0 }, { x: 100, y: 0, bulge: 0 }, { x: 100, y: 100, bulge: 0 }] },
+      { type: 'INSERT', layer: 'B', colorIndex: 3, name: 'SEDIA', insertionPoint: { x: 50, y: 50 }, xScale: 2, yScale: 2, rotation: Math.PI / 2, attribs: [attrib] },
+      { type: 'DIMENSION', layer: 'A', name: '*D1' },
+      { type: 'ARC', layer: 'A', center: { x: 0, y: 0 }, radius: 10, startAngle: 0, endAngle: Math.PI },
+      { type: 'MLINE', layer: 'A' },
+    ];
+    const paper = { type: 'CIRCLE', layer: 'A', center: { x: 0, y: 0 }, radius: 420 };
     const db = {
       header: { INSUNITS: 4 },
       tables: {
         LAYER: { entries: [{ name: 'A', colorIndex: 1 }, { name: 'B', colorIndex: -3 }] },
         BLOCK_RECORD: {
           entries: [
-            { name: '*Model_Space', basePoint: { x: 0, y: 0 }, entities: [] },
+            { name: '*Model_Space', basePoint: { x: 0, y: 0 }, entities: model },
+            { name: '*Paper_Space', basePoint: { x: 0, y: 0 }, entities: [paper] },
             { name: 'SEDIA', basePoint: { x: 0, y: 0 }, entities: [{ type: 'LINE', layer: '0', colorIndex: 0, startPoint: { x: 0, y: 0 }, endPoint: { x: 10, y: 0 } }] },
             { name: '*D1', basePoint: { x: 0, y: 0 }, entities: [{ type: 'TEXT', layer: 'A', colorIndex: 256, text: '250', startPoint: { x: 5, y: 5 }, textHeight: 2, rotation: 0 }] },
           ],
         },
       },
-      entities: [
-        { type: 'LWPOLYLINE', layer: 'A', colorIndex: 256, flag: 0x200, vertices: [{ x: 0, y: 0, bulge: 0 }, { x: 100, y: 0, bulge: 0 }, { x: 100, y: 100, bulge: 0 }] },
-        { type: 'INSERT', layer: 'B', colorIndex: 3, name: 'SEDIA', insertionPoint: { x: 50, y: 50 }, xScale: 2, yScale: 2, rotation: Math.PI / 2, attribs: [] },
-        { type: 'DIMENSION', layer: 'A', name: '*D1' },
-        { type: 'ARC', layer: 'A', center: { x: 0, y: 0 }, radius: 10, startAngle: 0, endAngle: Math.PI },
-        { type: 'MLINE', layer: 'A' },
-      ],
+      entities: [...model, attrib, paper],
     };
     const { drawing, skipped } = fromDwgDatabase(db);
     const r = buildImport(drawing, 'cm');
+    // niente spazio carta, e l'attributo una volta sola, con il suo testo e la sua posizione
+    expect(r.ents.some(e => e.t === 'circle')).toBe(false);
+    const att = r.ents.filter(e => e.t === 'text' && e.s === 'D12') as TextE[];
+    expect(att.length).toBe(1);
+    expect(att[0].p.x).toBeCloseTo(5.5, 9);
+    expect(att[0].h).toBeCloseTo(0.3, 9);
+    expect(r.ents.some(e => e.t === 'text' && e.s.includes('object'))).toBe(false);
     expect(r.scale).toBeCloseTo(0.1, 12);
     const poly = r.ents.find(e => e.t === 'poly') as PolyE;
     expect(poly.closed).toBe(true);

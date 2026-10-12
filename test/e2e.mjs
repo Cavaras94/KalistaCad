@@ -534,6 +534,37 @@ check('annulla riporta ai centimetri', backCm.u === 'cm' && backCm.w.b.x === wal
 await page.evaluate(() => window.app.zoomExtents());
 await page.waitForTimeout(50);
 
+// ---- difetti corretti dopo la revisione: riferimento, spostamento, appunti, Canc
+await cmd('L'); await cmd('8000,0'); await cmd('8100,0'); await cmd('');
+const refLine = await lastEnt();
+await page.evaluate(() => window.app.zoomWindow({ x: 7900, y: -200 }, { x: 8500, y: 350 }));
+await page.waitForTimeout(50);
+await clickWorld(8050, 0);
+await cmd('RO'); await cmd('8000,0'); await cmd('R'); await cmd('30');
+check('RUOTA Riferimento: dopo l\'angolo di riferimento chiede il nuovo angolo', (await prompt()).includes('nuovo angolo'), await prompt());
+await cmd('90');
+const rot60 = await byId(refLine.id);
+check('RUOTA Riferimento 30 → 90 ruota di 60°', Math.abs(rot60.b.x - 8050) < 1e-6 && Math.abs(rot60.b.y - 86.60254) < 1e-4 && (await prompt()) === 'Comando:', JSON.stringify(rot60));
+await clickWorld(8025, 43.30127);
+await cmd('M'); await cmd('S'); await cmd('@100,0');
+const moved = await byId(refLine.id);
+check('SPOSTA Spostamento @100,0 sposta di 100 e non dall\'ultimo punto', Math.abs(moved.a.x - 8100) < 1e-6 && Math.abs(moved.a.y) < 1e-6, JSON.stringify(moved));
+await cmd('C'); await cmd('8300,0'); await cmd('20');
+await clickWorld(8314.14, 14.14);
+await kb.press('Control+c');
+await kb.press('Control+v');
+await cmd('8200,180');
+const pastedC = await lastEnt();
+check('copia e incolla di un solo cerchio: finisce dove si indica', pastedC.t === 'circle' && Math.abs(pastedC.c.x - 8220) < 1e-6 && Math.abs(pastedC.c.y - 200) < 1e-6, JSON.stringify(pastedC));
+await page.focus('#cmdinput');
+await kb.press('Delete');
+check('Canc cancella la selezione anche con il cursore nella riga di comando', !(await byId(pastedC.id)));
+await clickWorld(8314.14, 14.14);
+await cmd('MI'); await cmd('8400,0'); await cmd('8400,100'); await cmd('si');
+check('"si" senza accento vale come Sì', (await lastEnt()).t === 'circle' && Math.abs((await lastEnt()).c.x - 8500) < 1e-6 && (await prompt()) === 'Comando:', await prompt());
+await page.evaluate(() => window.app.zoomExtents());
+await page.waitForTimeout(50);
+
 // ---- comando sconosciuto
 await cmd('PIPPO');
 check('comando sconosciuto segnalato', (await page.textContent('#history')).includes('Comando sconosciuto'));

@@ -78,7 +78,7 @@ export interface PrimCtx {
 export const DEFAULT_CTX: PrimCtx = { dimH: 15, dimDec: 0, areaDiv: 10000 };
 
 export function fmtNum(x: number, dec: number): string {
-  return x.toFixed(dec).replace('.', ',');
+  return x.toFixed(Math.min(8, Math.max(0, Math.round(dec) || 0))).replace('.', ',');
 }
 
 /** Disposizione delle righe di un testo, in coordinate locali (prima della rotazione). */
@@ -614,12 +614,6 @@ export function moveGrip(e: Ent, i: number, p: Vec): Ent {
 
 // ---------------------------------------------------------------- trasformazioni
 
-function readableAfter(m: Mat, rot: number): number {
-  let r = mapAngle(m, rot);
-  if (det(m) < 0 && Math.cos(r) < -1e-9) r += Math.PI;
-  return r;
-}
-
 export function transform<E extends Ent>(e: E, m: Mat): E {
   const P = (p: Vec) => apply(m, p);
   const s = matScale(m);
@@ -635,7 +629,16 @@ export function transform<E extends Ent>(e: E, m: Mat): E {
       r = { ...x, c: P(x.c), r: x.r * s, a0: mirror ? a1 : a0, a1: mirror ? a0 : a1 };
       break;
     }
-    case 'text': r = { ...x, p: P(x.p), h: x.h * s, rot: readableAfter(m, x.rot) }; break;
+    case 'text': {
+      r = { ...x, p: P(x.p), h: x.h * s, rot: mapAngle(m, x.rot) };
+      if (mirror) {
+        // Il testo specchiato resta leggibile, ma deve occupare il posto dell'immagine allo specchio:
+        // se lo si rigira (verrebbe capovolto) cambia l'ancoraggio destra/sinistra, altrimenti sopra/sotto.
+        if (Math.cos(r.rot) < -1e-9) { r.rot = normAng(r.rot + Math.PI); r.ha = x.ha === 'l' ? 'r' : x.ha === 'r' ? 'l' : 'c'; }
+        else r.va = x.va === 'b' ? 't' : x.va === 't' ? 'b' : 'm';
+      }
+      break;
+    }
     case 'dim':
       r = { ...x, a: P(x.a), b: P(x.b), p: P(x.p), ang: x.ang === undefined ? undefined : mapAngle(m, x.ang) };
       if (x.c) r.c = P(x.c);

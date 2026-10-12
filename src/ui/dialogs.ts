@@ -168,6 +168,9 @@ export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Setting
       label: 'Salva', primary: true, onClick: () => {
         snap.modes = new Set(kinds.filter(k => boxes.get(k)!.checked));
         snap.polarInc = parseFloat(polar.value);
+        // valori che romperebbero il disegno: decimali fuori misura, spessori e altezze a zero
+        s.dimDec = Math.min(8, Math.max(0, Math.round(s.dimDec)));
+        for (const k of ['textH', 'dimH', 'wallTh', 'doorW', 'windowW', 'hatchSp', 'grid', 'ltScale'] as const) if (!(s[k] > 0)) s[k] = doc.settings[k];
         onSave(s, how.value === 'convert');
       },
     },
@@ -218,7 +221,7 @@ function loadPrint(): SavedPrint {
   };
   try {
     const s = JSON.parse(localStorage.getItem(PRINT_KEY) ?? 'null');
-    if (s) return { ...def, ...s, fields: { ...def.fields, ...s.fields, data: s.fields?.data || def.fields.data } };
+    if (s) return { ...def, ...s, fields: { ...def.fields, ...s.fields, data: def.fields.data } }; // la data riparte sempre da oggi
   } catch { /* preferenze non disponibili */ }
   return def;
 }

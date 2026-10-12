@@ -31,7 +31,8 @@ abstract class BaseToSecond extends SelTool {
     this.ask('Specificare punto base o', [O('S', 'Spostamento')]);
   }
   option(k: string) {
-    if (k === 'S') { this.from = { x: 0, y: 0 }; this.ask('Specificare spostamento come @dx,dy o dx,dy'); }
+    // lo spostamento parte da 0,0: anche @dx,dy va contato da lì e non dall'ultimo punto disegnato
+    if (k === 'S') { this.from = { x: 0, y: 0 }; this.h.lastPoint = { x: 0, y: 0 }; this.ask('Specificare spostamento come @dx,dy o dx,dy'); }
   }
   point(p: Vec) {
     if (!this.from) { this.from = p; this.base = p; this.ask(this.secondPrompt()); return; }
@@ -61,7 +62,7 @@ export class CopyTool extends BaseToSecond {
   protected secondPrompt() { return 'Specificare secondo punto (Invio per finire)'; }
   protected apply(m: Mat) {
     const copies = this.sel.map(e => strip(transform(e, m)));
-    this.h.doc.edit('Copia', () => this.h.doc.addMany(copies));
+    this.h.doc.edit('Copia', () => this.h.doc.addCopies(copies));
     this.ask(this.secondPrompt());
   }
   enter() { this.h.setSelection([]); this.h.done(); }
@@ -96,7 +97,14 @@ export class RotateTool extends SelTool {
   text(s: string): boolean {
     const a = parseAngle(s);
     if (a === null || !this.c) return false;
-    this.apply(this.ref?.step === 'new' ? a - (this.ref.ang ?? 0) : a);
+    if (this.ref && this.ref.step !== 'new') {
+      // angolo di riferimento digitato: ora serve il nuovo angolo
+      this.ref = { step: 'new', ang: a };
+      this.base = this.c;
+      this.ask('Specificare nuovo angolo');
+      return true;
+    }
+    this.apply(this.ref ? a - (this.ref.ang ?? 0) : a);
     return true;
   }
 
@@ -114,7 +122,7 @@ export class RotateTool extends SelTool {
   private apply(ang: number) {
     const m = rotateAbout(this.c!, ang);
     const out = this.sel.map(e => transform(e, m));
-    this.h.doc.edit('Ruota', () => (this.copy ? this.h.doc.addMany(out.map(strip)) : this.h.doc.replace(out)));
+    this.h.doc.edit('Ruota', () => (this.copy ? this.h.doc.addCopies(out.map(strip)) : this.h.doc.replace(out)));
     this.h.setSelection([]);
     this.h.done();
   }
@@ -150,7 +158,7 @@ export class MirrorTool extends SelTool {
   private apply(erase: boolean) {
     const m = mirrorAcross(this.p1!, this.p2!);
     const out = this.sel.map(e => transform(e, m));
-    this.h.doc.edit('Specchio', () => (erase ? this.h.doc.replace(out) : this.h.doc.addMany(out.map(strip))));
+    this.h.doc.edit('Specchio', () => (erase ? this.h.doc.replace(out) : this.h.doc.addCopies(out.map(strip))));
     this.h.setSelection([]);
     this.h.done();
   }
@@ -186,7 +194,7 @@ export class ScaleTool extends SelTool {
   text(s: string): boolean {
     const n = parseNum(s);
     if (n === null || n <= 0 || !this.c) return false;
-    if (this.refStep === 1) { this.refLen = n; this.refStep = 3; this.ask('Specificare nuova lunghezza'); return true; }
+    if (this.refStep === 1 || this.refStep === 2) { this.refLen = n; this.refStep = 3; this.base = this.c; this.ask('Specificare nuova lunghezza'); return true; }
     this.apply(this.refStep === 3 ? n / (this.refLen || 1) : n);
     return true;
   }
@@ -249,6 +257,7 @@ export class OffsetTool extends Tool {
 
   enter() {
     if (this.mode === 'point' && !this.target && !this.through && this.numberAsText) { this.askEnt(); return; }
+    this.h.setSelection([]);
     this.h.done();
   }
 
@@ -307,6 +316,8 @@ function distanceTo(e: Ent, p: Vec): number {
 
 abstract class EdgeTool extends Tool {
   protected edges: Curve[] | null = null;
+  /** modifiche fatte da questo comando: Annulla non deve toccare quelle di prima */
+  protected edits = 0;
   private edgeIds: Set<number> | null = null;
   protected abstract verb: string;
 
@@ -338,7 +349,10 @@ abstract class EdgeTool extends Tool {
   }
 
   option(k: string) {
-    if (k === 'A') { if (!this.h.doc.undo()) this.h.msg('Niente da annullare.'); this.askPick(); }
+    if (k === 'A') {
+      if (this.edits) { this.h.doc.undo(); this.edits--; } else this.h.msg('Niente da annullare in questo comando.');
+      this.askPick();
+    }
   }
 
   enter() { this.h.done(); }
@@ -352,6 +366,7 @@ export class TrimTool extends EdgeTool {
     const r = trimEnt(e, this.cutters(e.id), p);
     if (!r) { this.h.msg('Nessuna intersezione con i bordi: niente da tagliare.'); return; }
     this.h.doc.edit('Taglia', () => { this.h.doc.remove([e.id]); this.h.doc.addMany(r); });
+    this.edits++;
     this.askPick();
   }
 }
@@ -364,6 +379,7 @@ export class ExtendTool extends EdgeTool {
     const r = extendEnt(e, this.cutters(e.id), p);
     if (!r) { this.h.msg('Nessun bordo da raggiungere in quella direzione.'); return; }
     this.h.doc.edit('Estendi', () => this.h.doc.replace([{ ...r, id: e.id } as Ent]));
+    this.edits++;
     this.askPick();
   }
 }
@@ -405,7 +421,7 @@ export class FilletTool extends Tool {
     if (e.id === this.first.e.id) return;
     if ((e.t === 'wall') !== (this.first.e.t === 'wall')) { this.h.msg('Serve lo stesso tipo: due linee o due muri.'); return; }
     const r = fillet(this.first.e, this.first.p, e, p, this.h.doc.settings.filletR);
-    if (!r) { this.h.msg('Le due entità sono parallele.'); return; }
+    if (!r) { this.h.msg('Raccordo non possibile: entità parallele, o raggio troppo grande per la loro lunghezza.'); return; }
     this.h.doc.edit('Raccorda', () => {
       this.h.doc.replace([r.a as Ent, r.b as Ent]);
       if (r.arc) this.h.doc.add(r.arc);
@@ -414,7 +430,7 @@ export class FilletTool extends Tool {
     this.h.done();
   }
 
-  enter() { if (this.numberAsText) this.askFirst(); else this.h.done(); }
+  enter() { if (this.numberAsText) this.askFirst(); else { this.h.setSelection([]); this.h.done(); } }
 }
 
 // ---------------------------------------------------------------- SMUSSO
@@ -477,7 +493,7 @@ export class ChamferTool extends Tool {
   enter() {
     if (this.asking === 'd1') this.askD2(this.h.doc.settings.chamferD1);
     else if (this.asking === 'd2') { this.h.doc.settings.chamferD2 = this.def2; this.askFirst(); }
-    else this.h.done();
+    else { this.h.setSelection([]); this.h.done(); }
   }
 }
 
@@ -590,9 +606,9 @@ export class ArrayTool extends SelTool {
       this.finish();
       return;
     }
-    const copies = mats.flatMap(m => this.sel.map(e => strip(transform(e, m))));
-    this.h.doc.edit('Serie', () => this.h.doc.addMany(copies));
-    this.h.msg(`${copies.length} entità create.`);
+    const copies = mats.map(m => this.sel.map(e => strip(transform(e, m))));
+    this.h.doc.edit('Serie', () => { for (const c of copies) this.h.doc.addCopies(c); });
+    this.h.msg(`${copies.length * this.sel.length} entità create.`);
     this.finish();
   }
 

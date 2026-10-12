@@ -136,13 +136,10 @@ export class PasteTool extends Tool {
   point(p: Vec) {
     const doc = this.h.doc;
     const list = this.moved(p);
-    const groups = new Map<number, number>();
     doc.edit('Incolla', () => {
-      const added = doc.addMany(list.map(e => {
-        if (e.g === undefined) return e;
-        if (!groups.has(e.g)) groups.set(e.g, doc.newGroupId());
-        return { ...e, g: groups.get(e.g) };
-      }));
+      // dopo Nuovo o Apri i layer degli appunti possono non esistere più
+      for (const e of list) doc.ensureLayer(e.layer);
+      const added = doc.addCopies(list);
       this.h.setSelection(added.map(e => e.id));
     });
     this.h.done();

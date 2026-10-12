@@ -3,6 +3,11 @@ import type { Ent, LineE, PolyE, CircleE, ArcE, WallE, DoorE, DimE, EllipseE, In
 import { prims, transform, arc3, snapPoints, explode, textCorners, dimValue, dimText, dimAngGeometry, DEFAULT_CTX, ellipsePoints, splinePoints, moveGrip, expandInsert, flatEnts } from '../src/model/entities';
 import { offsetPolyArcs, offsetEnt, trimEnt, extendEnt, fillet, chamfer, arrayRect, arrayPolar, joinEnts, boundaryCurves, closedLoopAt } from '../src/model/ops';
 import { buildWallCtx } from '../src/model/walls';
+import { findRegion } from '../src/model/region';
+import type { TextE, HatchE } from '../src/model/entities';
+import { clipLineToLoops, angInArc, lineCircle } from '../src/model/geom';
+import { Doc } from '../src/model/document';
+import { Tool, parsePoint } from '../src/tools/base';
 import { v, sweep, mirrorAcross, rotateAbout, scaleAbout, translate, compose, polygonArea, intersect, seg, arcC, apply, dist, TAU } from '../src/model/geom';
 import { usesBlock, findBlockName } from '../src/tools/blocks';
 
@@ -294,6 +299,96 @@ describe('altezza del testo delle quote', () => {
   it('scalando la quota scala anche la sua altezza', () => {
     expect(transform({ ...d, h: 40 }, scaleAbout(v(0, 0), 0.5)).h).toBe(20);
     expect(transform(d, scaleAbout(v(0, 0), 0.5)).h).toBeUndefined();
+  });
+});
+
+describe('difetti corretti dopo la revisione del 12 ottobre', () => {
+  it('specchio di un testo: occupa il posto dell\'immagine allo specchio', () => {
+    const t: TextE = { id: 1, layer: '0', t: 'text', p: v(10, 5), s: 'CUCINA', h: 20, rot: 0, ha: 'l', va: 'b' };
+    const box = (e: TextE) => { const c = textCorners(e); return { x0: Math.min(...c.map(q => q.x)), x1: Math.max(...c.map(q => q.x)), y0: Math.min(...c.map(q => q.y)), y1: Math.max(...c.map(q => q.y)) }; };
+    const o = box(t);
+    const my = box(transform(t, mirrorAcross(v(0, 0), v(0, 1))));
+    close(my.x1, -o.x0); close(my.x0, -o.x1);
+    expect(Math.cos(transform(t, mirrorAcross(v(0, 0), v(0, 1))).rot)).toBeCloseTo(1, 9);
+    const mx = box(transform(t, mirrorAcross(v(0, 0), v(1, 0))));
+    // sull'asse orizzontale resta il piccolo margine sotto la linea di base
+    expect(Math.abs(mx.y1 + o.y0)).toBeLessThan(0.3 * t.h);
+    expect(mx.y1).toBeLessThanOrEqual(0.001);
+  });
+  it('LOCALE e TRATTEGGIO trovano la stanza anche con un mobile a destra del clic', () => {
+    const room: Ent[] = [L(1, 0, 0, 100, 0), L(2, 100, 0, 100, 100), L(3, 100, 100, 0, 100), L(4, 0, 100, 0, 0)];
+    const chair: PolyE = { id: 5, layer: '0', t: 'poly', closed: true, pts: [v(60, 60), v(70, 60), v(70, 70), v(60, 70)] };
+    const box = { x0: 0, y0: 0, x1: 100, y1: 100 };
+    const r = findRegion([...room, chair], DEFAULT_CTX, v(50, 65), 300, box)!;
+    expect(r).toBeTruthy();
+    close(Math.abs(polygonArea(r)), 10000);
+    expect(findRegion([...room, L(6, 60, 60, 70, 70)], DEFAULT_CTX, v(50, 65), 300, box)).toBeTruthy();
+  });
+  it('raccordo con raggio più lungo delle linee: rifiutato, le linee restano intere', () => {
+    expect(fillet(L(1, 0, 0, 10, 0), v(5, 0), L(2, 0, 0, 0, 10), v(0, 5), 20)).toBeNull();
+    expect(fillet(L(1, 0, 0, 10, 0), v(5, 0), L(2, 0, 0, 0, 10), v(0, 5), 3)).not.toBeNull();
+  });
+  it('tratteggio: la riga che passa per un vertice non sparisce', () => {
+    const rombo = [v(0, -50), v(50, 0), v(0, 50), v(-50, 0)];
+    const segs = clipLineToLoops(v(0, 0), v(0, 1), [rombo]);
+    expect(segs.length).toBe(1);
+    close(Math.abs(segs[0][1].y - segs[0][0].y), 100);
+    const elle = [v(-100, -100), v(100, -100), v(100, 0), v(0, 0), v(0, 100), v(-100, 100)];
+    const diag = clipLineToLoops(v(-50, -50), v(1, 1), [elle]);
+    close(diag.reduce((s, [a, b]) => s + Math.hypot(b.x - a.x, b.y - a.y), 0), Math.SQRT2 * 100);
+    const h: HatchE = { id: 1, layer: '0', t: 'hatch', loops: [elle], pat: 'ansi31', sp: 10, ang: 0 };
+    expect(prims(h).length).toBeGreaterThan(20);
+  });
+  it('offset di una polilinea senza archi: distanza eccessiva rifiutata', () => {
+    const sq: PolyE = { id: 1, layer: '0', t: 'poly', closed: true, pts: [v(0, 0), v(10, 0), v(10, 10), v(0, 10)] };
+    expect(offsetEnt(sq, 8, v(5, 5))).toBeNull();
+    expect(offsetEnt(sq, 2, v(5, 5))).not.toBeNull();
+    expect(offsetEnt(sq, 8, v(5, -5))).not.toBeNull();
+  });
+  it('l\'estremo iniziale di un arco fa parte dell\'arco', () => {
+    expect(angInArc(4.50294947014537 - 1e-15, 4.50294947014537, 5.5)).toBe(true);
+    expect(angInArc(-1e-16, 0, 1)).toBe(true);
+    expect(angInArc(3, 0, 1)).toBe(false);
+  });
+  it('unisci chiude anche i contorni fatti di due pezzi', () => {
+    const arc: ArcE = { id: 2, layer: '0', t: 'arc', c: v(0, 0), r: 10, a0: 0, a1: Math.PI };
+    const d = joinEnts([L(1, -10, 0, 10, 0), arc])!.poly as PolyE;
+    expect(d.closed).toBe(true);
+    expect(d.pts.length).toBe(2);
+    expect(closedLoopAt([{ ...d, id: 9 } as Ent], v(0, 5))).not.toBeNull();
+    expect((joinEnts([L(1, 0, 0, 10, 0), L(2, 10, 0, 0, 0)])!.poly as PolyE).closed).toBe(false);
+  });
+  it('estendere un arco non lo toglie dal suo gruppo', () => {
+    const arc: ArcE = { id: 1, layer: '0', t: 'arc', c: v(0, 0), r: 10, a0: 0, a1: Math.PI / 2, g: 3 };
+    const r = extendEnt(arc, boundaryCurves([L(2, -5, -20, -5, 20)]), v(0, 10))!;
+    expect(r.g).toBe(3);
+    expect(r.t).toBe('arc');
+  });
+  it('le righe di un tratteggio non fanno da bordi di taglio', () => {
+    const h: HatchE = { id: 1, layer: '0', t: 'hatch', loops: [[v(0, 0), v(100, 0), v(100, 100), v(0, 100)]], pat: 'ansi31', sp: 10, ang: 0 };
+    expect(boundaryCurves([h]).length).toBe(0);
+  });
+  it('retta e cerchio in metri: niente tangenze false', () => {
+    expect(lineCircle(v(0, 0), v(0.0005, 0), v(0.30, 0.052), 0.05).length).toBe(0);
+    expect(lineCircle(v(0, 0), v(0.0005, 0), v(0.30, 0.05), 0.05).length).toBeGreaterThan(0);
+  });
+  it('le copie hanno gruppi propri', () => {
+    const doc = new Doc();
+    doc.edit('t', () => {
+      const [a, b2] = doc.addMany([{ t: 'line', a: v(0, 0), b: v(1, 0), layer: '0', g: 77 }, { t: 'line', a: v(1, 0), b: v(1, 1), layer: '0', g: 77 }]);
+      const copies = doc.addCopies([a, b2].map(({ id: _id, ...r }) => r));
+      expect(copies[0].g).toBe(copies[1].g);
+      expect(copies[0].g).not.toBe(77);
+    });
+  });
+  it('"si" vale per l\'opzione Sì; #x,y è un punto assoluto', () => {
+    class T extends Tool { readonly name = 'T'; start() {} }
+    const t = new T({ refresh() {} } as never);
+    t.options = [{ key: 'S', label: 'Sì' }, { key: 'N', label: 'No' }];
+    expect(t.matchOption('si')).toBe('S');
+    expect(t.matchOption('SÌ')).toBe('S');
+    expect(t.matchOption('n')).toBe('N');
+    expect(parsePoint('#100,50', v(7, 7), v(1, 1), v(0, 0))).toEqual(v(100, 50));
   });
 });
 

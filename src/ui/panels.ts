@@ -161,8 +161,9 @@ export class Panels {
       const same = vals.size === 1;
       const val = same ? [...vals][0] : '';
       const apply = (v: string) => {
-        const out = sel.map(e => f.set!(e, v)).filter((x): x is Ent => !!x);
+        const out = sel.filter(e => doc.isEditable(e)).map(e => f.set!(e, v)).filter((x): x is Ent => !!x);
         if (out.length) doc.edit(`Proprietà: ${f.label}`, () => doc.replace(out));
+        else this.renderProps(); // valore non valido o layer bloccato: il campo torna a mostrare quello vero
       };
       if (f.kind === 'ro') row.append(h('span', { class: 'ro' }, same ? (typeof f.get?.(sel[0]) === 'number' ? fmt(Number(val)) : val) : '— vari —'));
       else if (f.kind === 'button') {
@@ -200,6 +201,8 @@ export class Panels {
     el.innerHTML = '';
     const counts = new Map<string, number>();
     for (const e of doc.ents) counts.set(e.layer, (counts.get(e.layer) ?? 0) + 1);
+    // anche ciò che sta dentro i blocchi usa i layer: altrimenti "Elimina vuoti" li toglierebbe
+    for (const b of Object.values(doc.blocks)) for (const e of b.ents) counts.set(e.layer, (counts.get(e.layer) ?? 0) + 1);
     const table = h('div', { class: 'layer-list' });
     for (const l of doc.layers) table.append(this.layerRow(l, counts.get(l.name) ?? 0));
     const tools = h('div', { class: 'layer-tools' });
@@ -241,7 +244,9 @@ export class Panels {
       const old = l.name;
       upd('Rinomina layer', () => {
         l.name = nn;
-        doc.ents = doc.ents.map(e2 => (e2.layer === old ? ({ ...e2, layer: nn } as Ent) : e2));
+        const ren = (e2: Ent): Ent => (e2.layer === old ? ({ ...e2, layer: nn } as Ent) : e2);
+        doc.ents = doc.ents.map(ren);
+        doc.blocks = Object.fromEntries(Object.entries(doc.blocks).map(([k, b]) => [k, { ents: b.ents.map(ren) }]));
         if (doc.current === old) doc.current = nn;
       });
     };
