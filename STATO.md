@@ -8,7 +8,7 @@ Web app (TypeScript + Vite), gira nel browser.
 ```
 npm install
 npm run dev        # apre su http://localhost:5173
-npm test           # test unitari (155)
+npm test           # test unitari (156)
 npm run e2e        # collaudo in Chrome: digita i comandi come un utente
 npm run chiavetta  # prepara la versione da chiavetta in chiavetta/Kalista
 npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e in Edge
@@ -41,7 +41,7 @@ npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e i
 - Stampa: A4–A0, scala 1:1…1:5000 o adatta, cartiglio, spessori in mm, PDF dal browser.
   Verificata la scala esatta (500 cm a 1:100 = 50 mm) e il formato del PDF.
 
-Collaudo nel browser: 160 controlli su 160 passano. Versione da chiavetta: 10 su 10 (Chrome ed Edge).
+Collaudo nel browser: 172 controlli su 172 passano. Versione da chiavetta: 10 su 10 (Chrome ed Edge).
 
 ## Versioni
 
@@ -49,6 +49,11 @@ La versione è quella di `package.json` e compare in alto a sinistra accanto al 
 si legge anche la data), nella prima riga della riga di comando, in F1 e nel LEGGIMI della chiavetta.
 Prima di distribuire una copia nuova: aumentare la versione in `package.json`, poi `crea-chiavetta.bat`.
 
+- 0.4.1 (13 ottobre 2026): stampa di una finestra corretta (si stampa solo la finestra, adattata al
+  foglio; si sceglie con due clic o trascinando) e stampa dei soli oggetti selezionati; icona del PAN
+  (una mano) diversa da quella di SPOSTA; freccetta o clic destro su GRIGLIA, SNAP, POLARE ed ESNAP
+  nella barra di stato per scegliere i tipi di snap, il passo dello snap (incremento del cursore),
+  il passo della griglia e l'angolo polare senza aprire le Impostazioni.
 - 0.4.0 (13 ottobre 2026): testi su più righe in un riquadro che cresce, cartiglio nuovo (Nome
   cliente, Posa gres, Note) salvato nel disegno, Nuovo da file base e Salva con nome in barra
   (vedi "Versione 0.4.0" più sotto).

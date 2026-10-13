@@ -24,6 +24,10 @@ export interface PrintOpts {
   wallFill: WallFill;
   title: boolean;
   fields: TitleFields;
+  /** stampa solo ciò che sta dentro l'area (finestra scelta), non tutto quello che entra nel foglio */
+  clip?: boolean;
+  /** stampa solo queste entità (oggetti selezionati) */
+  only?: Set<number>;
   /** logo da mettere nel cartiglio (dati dell'immagine) */
   logo?: string;
 }
@@ -89,7 +93,12 @@ export function buildSheet(doc: Doc, o: PrintOpts): Sheet {
   const wallFill = o.wallFill === 'nero' ? '#000' : o.wallFill === 'grigio' ? '#9a9a9a' : 'none';
   const out: string[] = [];
   const order = (t: string) => (t === 'hatch' || t === 'room' ? 0 : t === 'wall' ? 1 : 2);
-  const ents = drawList(doc, ctx).filter(e => boxOverlap(entBoxCached(e, ctx), visible))
+  // con una finestra scelta si vede solo quella: il resto del foglio resta bianco
+  const shown: Box = o.clip
+    ? { x0: Math.max(visible.x0, o.area.x0), x1: Math.min(visible.x1, o.area.x1), y0: Math.max(visible.y0, o.area.y0), y1: Math.min(visible.y1, o.area.y1) }
+    : visible;
+  const cr = { x: X(shown.x0), y: Y(shown.y1), w: (shown.x1 - shown.x0) * k, h: (shown.y1 - shown.y0) * k };
+  const ents = drawList(doc, ctx, o.only).filter(e => boxOverlap(entBoxCached(e, ctx), shown))
     .sort((a, b) => order(a.t) - order(b.t));
 
   for (const e of ents) {
@@ -104,7 +113,7 @@ export function buildSheet(doc: Doc, o: PrintOpts): Sheet {
   const tb = o.title ? titleBlock(W, H, o.fields, o.logo) : '';
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}mm" height="${H}mm" viewBox="0 0 ${W} ${H}" font-family="Arial, Helvetica, sans-serif">
 <rect x="0" y="0" width="${W}" height="${H}" fill="#fff"/>
-<defs><clipPath id="vp"><rect x="${f(vp.x)}" y="${f(vp.y)}" width="${f(vp.w)}" height="${f(vp.h)}"/></clipPath></defs>
+<defs><clipPath id="vp"><rect x="${f(cr.x)}" y="${f(cr.y)}" width="${f(Math.max(cr.w, 0))}" height="${f(Math.max(cr.h, 0))}"/></clipPath></defs>
 <g clip-path="url(#vp)" fill="none" stroke-linecap="round" stroke-linejoin="round">
 ${out.join('\n')}
 </g>

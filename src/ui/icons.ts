@@ -59,7 +59,7 @@ const I: Record<string, string> = {
   erase: '<path d="M4 4l12 12 M16 4L4 16"/>',
   zoomext: '<circle cx="9" cy="9" r="5"/><path d="M13 13l5 5 M2 5V2h3 M18 5V2h-3 M2 15v3h3"/>',
   zoomwin: '<circle cx="9" cy="9" r="6"/><path d="M13.5 13.5L18 18"/><rect x="6" y="7" width="6" height="4"/>',
-  pan: '<path d="M10 2v16 M2 10h16 M10 2L8 4 M10 2l2 2 M10 18l-2-2 M10 18l2-2 M2 10l2-2 M2 10l2 2 M18 10l-2-2 M18 10l-2 2"/><circle cx="10" cy="10" r="2"/>',
+  pan: '<path d="M7 11V4.500a1.200 1.200 0 0 1 2.400 0V9.500 M9.400 9.500V3.200a1.200 1.200 0 0 1 2.400 0V9.500 M11.800 9.500V4a1.200 1.200 0 0 1 2.400 0V10 M14.200 10V6.500a1.200 1.200 0 0 1 2.400 0V12.500c0 3.300-2.200 5.500-5.600 5.500-2.400 0-3.800-1-5-3L3.400 11.800a1.300 1.300 0 0 1 2.200-1.400L7 12.500"/>',
   dist: '<path d="M2 14L14 2l4 4L6 18z M5 11l2 2 M8 8l2 2 M11 5l2 2"/>',
   area: '<path d="M3 15L6 4l11 3-3 10z" fill="currentColor" fill-opacity=".3"/>',
   layer: '<path d="M10 3l8 4-8 4-8-4z M2 11l8 4 8-4 M2 14l8 4 8-4"/>',

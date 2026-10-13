@@ -76,6 +76,24 @@ describe('cartiglio', () => {
     for (const l of word.lines) expect(textEm(l) * word.size).toBeLessThanOrEqual(40);
   });
 
+  it('finestra di stampa: si stampa solo ciò che è dentro; oggetti selezionati: solo quelli', () => {
+    const d = new Doc();
+    d.edit('x', () => {
+      d.add({ t: 'circle', c: v(100, 100), r: 50, layer: '0' });
+      d.add({ t: 'circle', c: v(400, 100), r: 50, layer: '0' });
+    });
+    const circles = (o: Partial<PrintOpts>) => (buildSheet(d, { ...opts(d, { cliente: '', posa: '', note: '' }), ...o }).svg.match(/<circle /g) ?? []).length;
+    const win = { x0: 20, y0: 20, x1: 180, y1: 180 };
+    // senza ritaglio, a 1:100 su un A3 entrerebbero tutti e due
+    expect(circles({ area: win })).toBe(2);
+    expect(circles({ area: win, clip: true })).toBe(1);
+    const sh = buildSheet(d, { ...opts(d, { cliente: '', posa: '', note: '' }), area: win, clip: true, scale: 0 });
+    // adattata al foglio: 160 unità (1,6 m) su 241 mm utili in altezza = 1:10
+    expect(sh.scale).toBe(10);
+    expect(sh.svg).toMatch(/<clipPath id="vp"><rect [^>]*width="160" height="160"/);
+    expect(circles({ only: new Set([d.ents[1].id]) })).toBe(1);
+  });
+
   it('le scritte si salvano con il disegno e Nuovo le azzera', () => {
     const d = new Doc();
     d.setCartiglio({ cliente: 'Bianchi', posa: '30x60', note: 'riga 1\nriga 2' });

@@ -1,6 +1,6 @@
 {
   "name": "kalista",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Kalista: disegno 2D di planimetrie con stampa in scala",
   "scripts": {
     "dev": "vite",

@@ -43,9 +43,10 @@ export function insertKids(e: InsertE, ctx: PrimCtx): Ent[] {
 }
 
 /** Entità visibili da disegnare, con i blocchi aperti nel loro contenuto. */
-export function drawList(doc: Doc, ctx: PrimCtx): Ent[] {
+export function drawList(doc: Doc, ctx: PrimCtx, only?: Set<number>): Ent[] {
   const out: Ent[] = [];
   for (const e of doc.ents) {
+    if (only && !only.has(e.id)) continue;
     if (!doc.layer(e.layer).visible) continue;
     if (e.t !== 'insert') { out.push(e); continue; }
     for (const k of insertKids(e, ctx)) if (doc.layer(k.layer).visible) out.push(k);

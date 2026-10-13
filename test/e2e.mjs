@@ -924,6 +924,70 @@ check('cartiglio: le scritte stanno nel disegno', await page.evaluate(() => wind
 await kb.press('Escape');
 await page.waitForTimeout(40);
 
+// ---- stampa di una finestra scelta sul disegno: solo quella, adattata al foglio
+await page.evaluate(() => {
+  const d = window.app.doc;
+  d.edit('prova stampa', () => {
+    d.add({ t: 'circle', c: { x: 30100, y: 30100 }, r: 50, layer: '0' });
+    d.add({ t: 'circle', c: { x: 30400, y: 30100 }, r: 50, layer: '0' });
+  });
+  window.app.zoomWindow({ x: 29900, y: 29900 }, { x: 30700, y: 30300 });
+});
+await page.waitForTimeout(60);
+const circleIds = (await ents()).slice(-2).map(e => e.id);
+const nCircles = () => page.evaluate(() => document.querySelectorAll('.print-preview svg g circle').length);
+await cmd('PRINT');
+await page.waitForSelector('.print-preview svg');
+await page.selectOption('.print-form select >> nth=2', '100');
+await page.click('.print-form button.small');
+check('finestra di stampa: la finestra di dialogo si chiude per scegliere sul disegno', !(await page.$('.modal')));
+await clickWorld(30020, 30020);
+await clickWorld(30180, 30180);
+await page.waitForSelector('.print-preview svg');
+check('finestra di stampa con due clic: si stampa solo quello che c\'è dentro', (await nCircles()) === 1 && (await page.inputValue('.print-form select >> nth=3')) === 'win', String(await nCircles()));
+const winInfo = await page.textContent('.print-info');
+check('finestra di stampa: adattata al foglio, non alla scala di prima', (await page.inputValue('.print-form select >> nth=2')) === '0' && winInfo.includes('entra nel foglio') && !winInfo.includes('1:100 '), winInfo);
+const clipW = await page.evaluate(() => parseFloat(document.querySelector('.print-preview svg clipPath rect').getAttribute('width')));
+check('finestra di stampa: il resto del foglio resta bianco', clipW > 50 && clipW < 400, String(clipW));
+// si può scegliere anche trascinando
+await page.click('.print-form button.small');
+const d0 = await toScreen(30320, 30020), d1 = await toScreen(30480, 30180);
+await page.mouse.move(d0.x, d0.y); await page.mouse.down(); await page.mouse.move((d0.x + d1.x) / 2, (d0.y + d1.y) / 2); await page.mouse.move(d1.x, d1.y); await page.mouse.up();
+await page.waitForSelector('.print-preview svg');
+check('finestra di stampa trascinando', (await nCircles()) === 1 && Math.abs((await page.evaluate(() => window.app.printWin.x0)) - 30320) < 3, JSON.stringify(await page.evaluate(() => window.app.printWin)));
+await kb.press('Escape');
+// solo gli oggetti selezionati
+await page.evaluate(id => window.app.setSelection([id]), circleIds[0]);
+await cmd('PRINT');
+await page.waitForSelector('.print-preview svg');
+await page.selectOption('.print-form select >> nth=3', 'sel');
+await page.waitForTimeout(60);
+check('stampa dei soli oggetti selezionati', (await nCircles()) === 1 && (await page.evaluate(() => document.querySelectorAll('.print-preview svg g > *').length)) === 1);
+await kb.press('Escape');
+await kb.press('Escape');
+
+// ---- barra di stato: tipi di snap e passo dello snap senza passare dalle Impostazioni
+await page.click('#st-osnap-more');
+await page.waitForSelector('.st-pop');
+check('menu ESNAP: gli otto tipi di snap', (await page.locator('.st-pop input[type=checkbox]').count()) === 8 && (await page.textContent('.st-pop')).includes('Perpendicolare'));
+await page.locator('.st-pop label', { hasText: 'Vicino' }).click();
+check('menu ESNAP: il tipo scelto vale subito', await page.evaluate(() => window.app.snapSt.modes.has('near')));
+await page.locator('.st-pop label', { hasText: 'Vicino' }).click();
+await page.screenshot({ path: join(OUT, 'menu-snap.png') });
+await kb.press('Escape');
+check('menu ESNAP: Esc lo chiude', !(await page.$('.st-pop')));
+await page.click('#st-snap', { button: 'right' });
+await page.waitForSelector('.st-pop input[type=text]');
+await page.fill('.st-pop input[type=text]', '2,5');
+await kb.press('Enter');
+await page.waitForTimeout(40);
+check('menu SNAP (clic destro): passo dello snap cambiato e snap acceso', await page.evaluate(() => window.app.doc.settings.snap === 2.5 && window.app.snapSt.gridSnap) && !(await page.$('.st-pop')));
+await cmd('L'); await clickWorld(30101.1, 30201.4); await clickWorld(30151.2, 30201.3); await cmd('');
+const snapped = await lastEnt();
+check('con lo snap acceso i punti cadono sui multipli del passo', snapped.t === 'line' && [snapped.a.x, snapped.a.y, snapped.b.x, snapped.b.y].every(n => Math.abs(n / 2.5 - Math.round(n / 2.5)) < 1e-9), JSON.stringify(snapped));
+await kb.press('F9');
+check('icone diverse per SPOSTA e PAN', await page.evaluate(() => { const q = t => document.querySelector('#toolbar button[title^="' + t + '"]')?.innerHTML; return !!q('Sposta') && !!q('Pan') && q('Sposta') !== q('Pan'); }));
+
 // ---- file base e salvataggi: Nuovo da file base, Salva, Salva con nome
 const basePath = join(OUT, 'base.kalista');
 const baseData = await page.evaluate(() => JSON.stringify(window.app.doc.toData()));

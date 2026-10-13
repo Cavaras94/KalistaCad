@@ -1,7 +1,7 @@
 // Applicazione: vista, input, riga di comando, file.
 import type { Ent, NewEnt, PrimCtx, SnapKind } from '../model/entities';
 import { prims, grips, entBox, flatEnts, retext } from '../model/entities';
-import { Doc, DocData, UNIT_LABEL } from '../model/document';
+import { Doc, DocData, UNIT_LABEL, UNIT_MM } from '../model/document';
 import { buildWallCtx } from '../model/walls';
 import { Vec, Box, v, dist, boxOf, sub, angleOf, len, emptyBox, boxUnion, boxValid, same } from '../model/geom';
 import { View } from '../view/view';
@@ -579,6 +579,8 @@ export class App implements Host {
     window.addEventListener('mouseup', e => {
       if (this.panning && (e.button === 1 || e.button === 0)) { this.panning = null; c.style.cursor = ''; }
       if (e.button === 0 && this.boxStart && this.boxMoved && this.mouse) this.finishBox(this.mouse, e.shiftKey);
+      // finestra di stampa presa trascinando, oltre che con due clic
+      if (e.button === 0 && this.pickingPrintWindow && this.printWinStart && this.mouse && dist(this.view.toScreen(this.printWinStart), this.mouse) > 8) this.finishPrintWindow(this.cursor);
     });
     c.addEventListener('wheel', e => {
       e.preventDefault();
@@ -630,10 +632,7 @@ export class App implements Host {
 
     if (this.pickingPrintWindow) {
       if (!this.printWinStart) { this.printWinStart = world; this.msg('Specificare l\'angolo opposto.'); return; }
-      this.printWin = boxOf(this.printWinStart, world);
-      this.printWinStart = null;
-      this.pickingPrintWindow = false;
-      this.openPrint();
+      this.finishPrintWindow(world);
       return;
     }
     if (t && (t as { panMode?: boolean }).panMode) { this.panning = s; return; }
@@ -1025,6 +1024,101 @@ export class App implements Host {
     this.setSelection([...this.selection].filter(i => ids.has(i)));
   }
 
+  /** Menu sopra un pulsante della barra di stato: tipi di snap, passo dello snap e della griglia, angolo polare. */
+  private statusMenu(what: 'grid' | 'snap' | 'polar' | 'osnap', anchor: HTMLElement) {
+    document.querySelector('.st-pop')?.remove();
+    const pop = document.createElement('div');
+    pop.className = 'st-pop';
+    const s = this.snapSt, doc = this.doc;
+    const close = () => { pop.remove(); document.removeEventListener('mousedown', out, true); document.removeEventListener('keydown', key, true); this.input.focus(); };
+    const out = (e: MouseEvent) => { if (!pop.contains(e.target as Node)) close(); };
+    const key = (e: KeyboardEvent) => {
+      e.stopPropagation();
+      if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); (document.activeElement as HTMLElement | null)?.blur(); close(); }
+    };
+    const head = (t: string) => { const d = document.createElement('div'); d.className = 'st-pop-head'; d.textContent = t; pop.append(d); };
+    const redraw = () => { this.baseDirty = true; this.updateStatus(); this.updateCursor(); this.schedule(); };
+    // passo scritto a mano, con la virgola o il punto; vale subito
+    const step = (label: string, k: 'grid' | 'snap', turnOn: () => void) => {
+      const row = document.createElement('label');
+      const i = document.createElement('input');
+      i.type = 'text';
+      i.value = fmtLen(doc.settings[k]);
+      const apply = () => {
+        const n = parseFloat(i.value.replace(',', '.'));
+        if (!Number.isFinite(n) || n <= 0 || n === doc.settings[k]) { i.value = fmtLen(doc.settings[k]); return; }
+        doc.edit(label, () => { doc.settings = { ...doc.settings, [k]: n }; });
+        turnOn();
+        this.msg(`${label}: ${fmtLen(n)} ${doc.settings.units}`);
+        redraw();
+      };
+      i.onchange = apply;
+      row.append(`${label} (${doc.settings.units}) `, i);
+      pop.append(row);
+      const quick = document.createElement('div');
+      quick.className = 'st-pop-quick';
+      const mm = UNIT_MM[doc.settings.units];
+      for (const v of [1, 5, 10, 50, 100, 500].map(x => x / mm)) { // 1 mm … 50 cm
+        const q = document.createElement('button');
+        q.textContent = fmtLen(v);
+        q.onclick = () => { i.value = fmtLen(v); apply(); };
+        quick.append(q);
+      }
+      pop.append(quick);
+      setTimeout(() => i.select(), 0);
+    };
+    if (what === 'osnap') {
+      head('Snap ad oggetto (F3)');
+      const kinds: SnapKind[] = ['end', 'mid', 'cen', 'quad', 'int', 'perp', 'ins', 'near'];
+      const boxes: HTMLInputElement[] = [];
+      for (const k of kinds) {
+        const row = document.createElement('label');
+        const c = document.createElement('input');
+        c.type = 'checkbox';
+        c.checked = s.modes.has(k);
+        c.onchange = () => { if (c.checked) { s.modes.add(k); s.osnap = true; } else s.modes.delete(k); redraw(); };
+        boxes.push(c);
+        row.append(c, ` ${SNAP_LABEL[k]}`);
+        pop.append(row);
+      }
+      const quick = document.createElement('div');
+      quick.className = 'st-pop-quick';
+      for (const [label, on] of [['Tutti', true], ['Nessuno', false]] as [string, boolean][]) {
+        const q = document.createElement('button');
+        q.textContent = label;
+        q.onclick = () => { s.modes = new Set(on ? kinds : []); boxes.forEach(c => { c.checked = on; }); if (on) s.osnap = true; redraw(); };
+        quick.append(q);
+      }
+      pop.append(quick);
+    } else if (what === 'snap') {
+      head('Incremento del cursore (F9)');
+      step('Passo dello snap', 'snap', () => { s.gridSnap = true; });
+      const note = document.createElement('small');
+      note.textContent = 'Con SNAP acceso il cursore si muove solo a multipli del passo.';
+      pop.append(note);
+    } else if (what === 'grid') {
+      head('Griglia (F7)');
+      step('Passo della griglia', 'grid', () => { this.gridOn = true; });
+    } else {
+      head('Puntamento polare (F10)');
+      for (const a of [5, 10, 15, 22.5, 30, 45, 90]) {
+        const row = document.createElement('label');
+        const c = document.createElement('input');
+        c.type = 'radio';
+        c.name = 'st-polar';
+        c.checked = s.polarInc === a;
+        c.onchange = () => { s.polarInc = a; s.polar = true; s.ortho = false; redraw(); };
+        row.append(c, ` ogni ${String(a).replace('.', ',')}°`);
+        pop.append(row);
+      }
+    }
+    document.body.append(pop);
+    const r = anchor.getBoundingClientRect(), p = pop.getBoundingClientRect();
+    pop.style.left = `${Math.max(4, Math.min(r.left, window.innerWidth - p.width - 4))}px`;
+    pop.style.top = `${Math.max(4, r.top - p.height - 4)}px`;
+    setTimeout(() => { document.addEventListener('mousedown', out, true); document.addEventListener('keydown', key, true); }, 0);
+  }
+
   private toggle(what: 'osnap' | 'grid' | 'ortho' | 'snap' | 'polar' | 'lwt' | 'otrack') {
     const s = this.snapSt;
     let on = false;
@@ -1093,6 +1187,18 @@ export class App implements Host {
       b.title = key ? `${label} (${key})` : label;
       b.onclick = () => { this.toggle(what); this.input.focus(); };
       st.append(b);
+      // opzioni del pulsante: freccetta accanto, o clic destro sul pulsante
+      if (what === 'grid' || what === 'snap' || what === 'polar' || what === 'osnap') {
+        b.title += ' — clic destro per le opzioni';
+        const more = document.createElement('button');
+        more.className = 'st-more';
+        more.id = `st-${what}-more`;
+        more.textContent = '▾';
+        more.title = `Opzioni di ${label}`;
+        more.onclick = () => this.statusMenu(what, b);
+        b.oncontextmenu = e => { e.preventDefault(); this.statusMenu(what, b); };
+        st.append(more);
+      }
     }
     const info = document.createElement('span');
     info.id = 'st-info';
@@ -1349,8 +1455,27 @@ export class App implements Host {
     }
   }
 
-  private openPrint() {
-    printDialog(this.doc, { ext: this.doc.extents(), view: this.view.visibleBox(), win: this.printWin }, () => {
+  private finishPrintWindow(world: Vec) {
+    const b = boxOf(this.printWinStart!, world);
+    if (b.x1 - b.x0 < 1e-9 || b.y1 - b.y0 < 1e-9) { this.msg('Finestra senza area: specificare l\'angolo opposto.'); return; }
+    this.printWin = b;
+    this.printWinStart = null;
+    this.pickingPrintWindow = false;
+    this.schedule();
+    this.openPrint(true);
+  }
+
+  private openPrint(winNew = false) {
+    // oggetti selezionati: si possono stampare da soli
+    const ctx = this.doc.ctx();
+    let sel: { box: Box; ids: Set<number> } | null = null;
+    for (const id of this.selection) {
+      const e = this.doc.byId(id);
+      if (!e) continue;
+      const b = entBox(e, ctx);
+      if (!sel) sel = { box: b, ids: new Set([id]) }; else { sel.box = boxUnion(sel.box, b); sel.ids.add(id); }
+    }
+    printDialog(this.doc, { ext: this.doc.extents(), view: this.view.visibleBox(), win: this.printWin, winNew, sel }, () => {
       this.pickingPrintWindow = true;
       this.printWinStart = null;
       this.msg('STAMPA: specificare il primo angolo della finestra da stampare (Esc per annullare).');

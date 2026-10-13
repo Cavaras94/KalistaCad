@@ -399,9 +399,21 @@ function loadPrint(): SavedPrint {
 
 export interface PrintArea { kind: 'ext' | 'view' | 'win'; box: Box }
 
-export function printDialog(doc: Doc, areas: { ext: Box | null; view: Box; win: Box | null }, pickWindow: () => void) {
+export interface PrintAreas {
+  ext: Box | null;
+  view: Box;
+  win: Box | null;
+  /** la finestra è stata appena scelta sul disegno */
+  winNew?: boolean;
+  /** oggetti selezionati al momento della stampa */
+  sel?: { box: Box; ids: Set<number> } | null;
+}
+
+export function printDialog(doc: Doc, areas: PrintAreas, pickWindow: () => void) {
   const o = loadPrint();
-  let areaKind: 'ext' | 'view' | 'win' = areas.win ? 'win' : areas.ext ? 'ext' : 'view';
+  let areaKind: 'ext' | 'view' | 'win' | 'sel' = areas.win ? 'win' : areas.ext ? 'ext' : 'view';
+  // una finestra appena scelta si stampa grande quanto il foglio permette; la scala si può poi cambiare
+  if (areas.winNew) o.scale = 0;
   const body = el('div', { class: 'print-layout' });
   const form = el('div', { class: 'print-form' });
   const preview = el('div', { class: 'print-preview' });
@@ -421,8 +433,9 @@ export function printDialog(doc: Doc, areas: { ext: Box | null; view: Box; win: 
   const areaOpts: [string, string][] = [['view', 'Vista corrente']];
   if (areas.ext) areaOpts.unshift(['ext', 'Tutto il disegno (estensioni)']);
   if (areas.win) areaOpts.push(['win', 'Finestra scelta']);
+  if (areas.sel) areaOpts.push(['sel', `Solo gli oggetti selezionati (${areas.sel.ids.size})`]);
   sel('Area da stampare', areaOpts, areaKind, v => { areaKind = v as typeof areaKind; });
-  const winBtn = el('button', { class: 'small' }, 'Scegli finestra sul disegno…');
+  const winBtn = el('button', { class: 'small' }, areas.win ? 'Cambia finestra sul disegno…' : 'Scegli finestra sul disegno…');
   winBtn.onclick = () => { m.close(); pickWindow(); };
   form.append(winBtn);
   sel('Colori', [['1', 'Monocromatico (nero)'], ['0', 'Colori dei layer']], o.mono ? '1' : '0', v => { o.mono = v === '1'; });
@@ -465,7 +478,9 @@ export function printDialog(doc: Doc, areas: { ext: Box | null; view: Box; win: 
   const opts = (): PrintOpts => ({
     ...o,
     fields,
-    area: areaKind === 'win' && areas.win ? areas.win : areaKind === 'ext' && areas.ext ? areas.ext : areas.view,
+    area: areaKind === 'win' && areas.win ? areas.win : areaKind === 'sel' && areas.sel ? areas.sel.box : areaKind === 'ext' && areas.ext ? areas.ext : areas.view,
+    clip: areaKind === 'win',
+    only: areaKind === 'sel' ? areas.sel?.ids : undefined,
   });
   function update() {
     if (pending) { pending = false; doc.setCartiglio(fields); }
