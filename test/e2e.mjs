@@ -187,9 +187,10 @@ await kb.press('Escape');
 
 // ---- testo con spazi
 await cmd('T'); await cmd('100,600'); await cmd(''); await cmd('');
+await page.waitForSelector('.write-box textarea');
 await kb.type('Cucina abitabile');
-await kb.press('Enter');
-await cmd('');
+await kb.press('Control+Enter');
+await page.waitForTimeout(40);
 const txt = (await ents()).find(e => e.t === 'text');
 check('testo con spazi', txt?.s === 'Cucina abitabile', txt?.s);
 
@@ -614,7 +615,11 @@ await cmd('DLI'); await cmd('9600,400'); await cmd('9700,400'); await cmd('9650,
 await cmd('DBA'); await cmd('9900,400'); await cmd('');
 const dba = await lastEnt();
 check('QUOTA dalla linea di base: stessa origine, linea più lontana', dba.t === 'dim' && dba.a.x === 9600 && dba.b.x === 9900 && Math.abs(dba.p.y - 487.5) < 1e-6, JSON.stringify(dba));
-await cmd('LE'); await cmd('9600,600'); await cmd('9700,650'); await cmd('9800,650'); await cmd(''); await cmd('pilastro 30x30');
+await cmd('LE'); await cmd('9600,600'); await cmd('9700,650'); await cmd('9800,650'); await cmd('');
+await page.waitForSelector('.write-box textarea');
+await kb.type('pilastro 30x30');
+await kb.press('Control+Enter');
+await page.waitForTimeout(40);
 const lead = await lastEnt();
 check('DIRETTRICE con testo', lead.t === 'leader' && lead.pts.length === 3 && lead.s === 'pilastro 30x30' && lead.layer === 'QUOTE' && (await prompt()) === 'Comando:', JSON.stringify(lead));
 
@@ -810,6 +815,157 @@ await page.waitForTimeout(50);
 // ---- comando sconosciuto
 await cmd('PIPPO');
 check('comando sconosciuto segnalato', (await page.textContent('#history')).includes('Comando sconosciuto'));
+
+// ================================================================ versione 0.4
+const NL = String.fromCharCode(10);
+await kb.press('Escape');
+await page.evaluate(() => window.app.zoomWindow({ x: 19800, y: 19700 }, { x: 20700, y: 20200 }));
+await page.waitForTimeout(60);
+
+// ---- testo su più righe: riquadro che cresce, Invio va a capo
+await cmd('T'); await cmd('20000,20000'); await cmd('20'); await cmd('0');
+await page.waitForSelector('.write-box textarea');
+const boxH = () => page.evaluate(() => { const t = document.querySelector('.write-box textarea'); return { h: t.clientHeight, sh: t.scrollHeight, w: t.clientWidth, sw: t.scrollWidth }; });
+const h0 = await boxH();
+await kb.type('Bagno');
+await kb.press('Enter');
+await kb.type('piastrelle 60x60');
+await page.waitForTimeout(40);
+const prevText = await page.evaluate(() => window.app.tool?.preview({ x: 0, y: 0 })[0]?.s);
+check('TESTO: anteprima nel disegno mentre si scrive, con gli a capo', prevText === 'Bagno' + NL + 'piastrelle 60x60', JSON.stringify(prevText));
+await kb.press('Enter'); await kb.type('terza riga'); await kb.press('Enter'); await kb.type('quarta riga molto lunga, per vedere che il riquadro si allarga insieme a quello che si scrive');
+await page.waitForTimeout(40);
+const h1 = await boxH();
+check('TESTO: il riquadro cresce e mostra tutte le righe', h1.h > h0.h && h1.sh <= h1.h + 2 && h1.w > h0.w && h1.sw <= h1.w + 2, JSON.stringify([h0, h1]));
+await page.screenshot({ path: join(OUT, 'testo-riquadro.png') });
+for (let i = 0; i < 2; i++) { await kb.press('Shift+Home'); await kb.press('Backspace'); await kb.press('Backspace'); }
+await kb.press('Control+Enter');
+await page.waitForTimeout(40);
+const mt = await lastEnt();
+check('TESTO: Invio va a capo, Ctrl+Invio conferma', mt.t === 'text' && mt.s === 'Bagno' + NL + 'piastrelle 60x60' && (await prompt()) === 'Comando:', JSON.stringify(mt));
+check('TESTO: la prima riga sta sul punto cliccato, la seconda sotto', mt.p.x === 20000 && Math.abs(mt.p.y - 19970) < 1e-6, JSON.stringify(mt.p));
+
+// ---- doppio clic: si modifica nello stesso riquadro
+const edge = await toScreen(20000, 19985);
+await page.mouse.dblclick(edge.x, edge.y);
+await page.waitForSelector('.write-box textarea');
+check('doppio clic su un testo: riquadro con le sue righe', (await page.inputValue('.write-box textarea')) === mt.s);
+await kb.press('Enter'); await kb.type('fuga 2 mm');
+await page.click('.write-box button.primary');
+await page.waitForTimeout(40);
+const mt2 = await byId(mt.id);
+check('modifica del testo: riga aggiunta sotto, la prima non si sposta', mt2.s === mt.s + NL + 'fuga 2 mm' && Math.abs(mt2.p.y - 19940) < 1e-6, JSON.stringify(mt2));
+await page.mouse.dblclick(edge.x, edge.y);
+await page.waitForSelector('.write-box textarea');
+await kb.type('zzz'); await kb.press('Escape');
+await page.waitForTimeout(40);
+check('modifica del testo: Esc lascia tutto com\'era', (await byId(mt.id)).s === mt2.s && !(await page.$('.write-box')));
+
+// ---- pannello Proprietà: casella a più righe
+await page.evaluate(id => window.app.setSelection([id]), mt.id);
+await page.waitForSelector('#props textarea');
+check('Proprietà: il testo si vede su più righe', (await page.inputValue('#props textarea')) === mt2.s && await page.evaluate(() => { const t = document.querySelector('#props textarea'); return t.scrollHeight <= t.clientHeight + 2 && t.clientHeight > 40; }));
+await page.fill('#props textarea', 'A' + NL + 'B');
+await page.evaluate(() => document.activeElement.blur());
+await page.waitForTimeout(40);
+check('Proprietà: testo cambiato su due righe', (await byId(mt.id)).s === 'A' + NL + 'B', (await byId(mt.id)).s);
+await kb.press('Escape');
+
+// ---- clic fuori dal riquadro: il destro non fa niente, il sinistro conferma
+const nTxt0 = (await ents()).length;
+await page.mouse.dblclick(edge.x, edge.y);
+await page.waitForSelector('.write-box textarea');
+await kb.type('C');
+const out = await toScreen(20500, 20150);
+await page.mouse.click(out.x, out.y, { button: 'right' });
+await page.waitForTimeout(60);
+check('riquadro di scrittura: il clic destro fuori non conferma e non rilancia comandi', !!(await page.$('.write-box')) && (await byId(mt.id)).s === 'A' + NL + 'B' && (await prompt()) === 'Comando:');
+for (let i = 0; i < 4; i++) await kb.press('Tab');
+check('riquadro di scrittura: Tab resta dentro il riquadro', await page.evaluate(() => !!document.activeElement.closest('.write-box')));
+await page.waitForTimeout(450);
+await page.mouse.click(out.x, out.y);
+await page.waitForTimeout(60);
+check('riquadro di scrittura: il clic sinistro fuori conferma', !(await page.$('.write-box')) && (await byId(mt.id)).s === 'A' + NL + 'BC' && (await ents()).length === nTxt0, (await byId(mt.id)).s);
+await kb.press('Escape');
+
+// ---- nome di un locale su due righe: si modifica senza perdere l'a capo
+const roomId = await page.evaluate(nl => {
+  const d = window.app.doc;
+  d.edit('locale', () => { d.add({ t: 'room', pts: [{ x: 20300, y: 19750 }, { x: 20600, y: 19750 }, { x: 20600, y: 19950 }, { x: 20300, y: 19950 }], name: 'Soggiorno' + nl + 'Cucina', layer: '0' }); });
+  const id = d.ents.at(-1).id;
+  window.app.editText(d.byId(id));
+  return id;
+}, NL);
+await page.waitForSelector('.write-box textarea');
+check('nome del locale su due righe: il riquadro le mostra', (await page.inputValue('.write-box textarea')) === 'Soggiorno' + NL + 'Cucina');
+await kb.type(' abitabile');
+await kb.press('Control+Enter');
+await page.waitForTimeout(40);
+check('nome del locale: l\'a capo resta', (await byId(roomId)).name === 'Soggiorno' + NL + 'Cucina abitabile', (await byId(roomId)).name);
+
+// ---- cartiglio: Nome cliente, Posa gres, Note, su più righe e salvati nel disegno
+await cmd('PRINT');
+await page.waitForSelector('.print-preview svg');
+const tas = page.locator('.title-fields textarea');
+check('cartiglio: tre caselle (Nome cliente, Posa gres, Note)', (await tas.count()) === 3 && (await page.textContent('.title-fields')).includes('Nome cliente') && !(await page.textContent('.print-form')).includes('Disegnatore'));
+await tas.nth(0).fill('Rossi Mario');
+await tas.nth(1).fill('60x60 a correre');
+await tas.nth(2).click();
+const n0 = await tas.nth(2).evaluate(t => t.clientHeight);
+await kb.type('fuga 2 mm'); await kb.press('Enter'); await kb.type('battiscopa'); await kb.press('Enter'); await kb.type('terza'); await kb.press('Enter'); await kb.type('quarta'); await kb.press('Enter'); await kb.type('quinta');
+await page.waitForTimeout(400);
+const n1 = await tas.nth(2).evaluate(t => ({ h: t.clientHeight, sh: t.scrollHeight }));
+check('cartiglio: Invio va a capo nella casella, che cresce (e non fa partire la stampa)', !!(await page.$('.modal')) && n1.h > n0 && n1.sh <= n1.h + 2, JSON.stringify([n0, n1]));
+const tbText = await page.evaluate(() => [...document.querySelectorAll('.print-preview svg > text')].map(t => t.textContent));
+check('cartiglio in stampa: le tre voci nuove con le righe scritte', ['NOME CLIENTE', 'POSA GRES', 'NOTE', 'Rossi Mario', '60x60 a correre', 'fuga 2 mm', 'battiscopa', 'quinta'].every(s => tbText.includes(s)), tbText.join(' | '));
+check('cartiglio in stampa: niente scala, data, tavola, disegnatore', !tbText.some(s => ['SCALA', 'DATA', 'TAVOLA', 'DISEGNATORE', 'PROGETTO', 'OGGETTO'].includes(s)), tbText.join(' | '));
+await page.screenshot({ path: join(OUT, 'cartiglio.png') });
+check('cartiglio: le scritte stanno nel disegno', await page.evaluate(() => window.app.doc.toData().cartiglio?.note) === ['fuga 2 mm', 'battiscopa', 'terza', 'quarta', 'quinta'].join(NL));
+await kb.press('Escape');
+await page.waitForTimeout(40);
+
+// ---- file base e salvataggi: Nuovo da file base, Salva, Salva con nome
+const basePath = join(OUT, 'base.kalista');
+const baseData = await page.evaluate(() => JSON.stringify(window.app.doc.toData()));
+writeFileSync(basePath, baseData);
+await page.evaluate(() => {
+  window.__saved = []; window.__asked = 0;
+  const handle = name => ({ name, createWritable: async () => ({ write: async d => { window.__saved.push({ name, len: d.length }); }, close: async () => {} }) });
+  window.__handle = handle;
+  window.showSaveFilePicker = async o => { window.__asked++; return handle(o.suggestedName); };
+  window.app.doc.dirty = false;
+});
+const nEnts = (await ents()).length;
+const baseCh = page.waitForEvent('filechooser');
+await cmd('NUOVODA');
+await (await baseCh).setFiles(basePath);
+await page.waitForFunction(() => document.getElementById('history').textContent.includes('Nuovo disegno dal file base base.kalista'));
+check('NUOVODA: il file base si apre come copia senza nome', (await page.title()).startsWith('Senza nome') && (await ents()).length === nEnts, await page.title());
+check('NUOVODA: porta con sé anche il cartiglio del file base', await page.evaluate(() => window.app.doc.cartiglio.posa) === '60x60 a correre');
+await kb.press('Control+s');
+await page.waitForFunction(() => window.__saved.length === 1);
+check('primo Salva dopo il file base: chiede il nome e propone quello del cliente', await page.evaluate(() => window.__asked === 1 && window.__saved[0].name === 'Rossi Mario.kalista'), JSON.stringify(await page.evaluate(() => window.__saved)));
+check('dopo il salvataggio il disegno ha il nome nuovo', (await page.title()).startsWith('Rossi Mario'), await page.title());
+await cmd('L'); await cmd('20000,19800'); await cmd('20100,19800'); await cmd('');
+await kb.press('Control+s');
+await page.waitForFunction(() => window.__saved.length === 2);
+check('Salva successivo: stesso file, senza chiedere', await page.evaluate(() => window.__asked === 1 && window.__saved[1].name === 'Rossi Mario.kalista' && window.__saved[1].len > window.__saved[0].len));
+await page.click('#toolbar button[title^="Salva con nome"]');
+await page.waitForFunction(() => window.__saved.length === 3);
+check('pulsante Salva con nome: chiede un file nuovo', await page.evaluate(() => window.__asked === 2));
+check('pulsante Nuovo da un file base nella barra', !!(await page.$('#toolbar button[title^="Nuovo da un file base"]')));
+// Apri con il selettore del browser: Salva riscrive il file aperto
+await page.evaluate(data => {
+  window.showOpenFilePicker = async () => [{ ...window.__handle('cliente2.kalista'), getFile: async () => new File([data], 'cliente2.kalista') }];
+  window.app.doc.dirty = false;
+}, baseData);
+await cmd('APRI');
+await page.waitForFunction(() => document.getElementById('history').textContent.includes('Aperto cliente2.kalista'));
+await cmd('L'); await cmd('20000,19750'); await cmd('20100,19750'); await cmd('');
+await kb.press('Control+s');
+await page.waitForFunction(() => window.__saved.length === 4);
+check('Apri e poi Salva: riscrive il file aperto senza chiedere', await page.evaluate(() => window.__asked === 2 && window.__saved[3].name === 'cliente2.kalista'), JSON.stringify(await page.evaluate(() => window.__saved)));
+await page.evaluate(() => { delete window.showOpenFilePicker; delete window.showSaveFilePicker; window.app.doc.dirty = false; });
 
 // ---- DWG: il modulo LibreDWG si carica nel browser e un file rovinato dà un errore chiaro
 const junkDwg = join(OUT, 'rovinato.dwg');

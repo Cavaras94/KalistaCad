@@ -1,11 +1,11 @@
 // Comandi di disegno.
 import type { Ent, NewEnt, HAlign, HatchPattern } from '../model/entities';
-import { HATCH_NAMES } from '../model/entities';
+import { HATCH_NAMES, retext } from '../model/entities';
 import { arc3 } from '../model/entities';
 import { closedLoopAt, islandsIn } from '../model/ops';
 import { findRegion } from '../model/region';
 import { polyPoints } from '../model/entities';
-import { Vec, v, add, sub, mul, dist, angleOf, same, dirOf, norm, cross, dot, len, mid, TAU, tessArc } from '../model/geom';
+import { Vec, v, sub, dist, angleOf, same, norm, cross, dot, len, mid, TAU, tessArc } from '../model/geom';
 import { Tool, O, parseNum, parseAngle, fmtLen } from './base';
 
 // ---------------------------------------------------------------- LINEA
@@ -491,7 +491,25 @@ export class TextTool extends Tool {
   }
 
   private askRot() { this.step = 'r'; this.ask('Specificare angolo di rotazione', [], '0'); }
-  private askText() { this.step = 'txt'; this.base = null; this.ask('Inserire testo (Invio su riga vuota per finire)', [], undefined, 'text'); }
+  /** Il testo si scrive in un riquadro a più righe accanto al punto, con l'anteprima nel disegno. */
+  private askText() {
+    this.step = 'txt'; this.base = null; this.typed = '';
+    this.ask('Scrivere il testo nel riquadro (Invio = a capo, Ctrl+Invio = conferma)', [], undefined, 'none');
+    const p = this.p!;
+    void this.h.write({ title: 'Testo', at: p, onInput: s => { this.typed = s; this.h.refresh(); } }).then(raw => {
+      if (this.step !== 'txt' || this.p !== p) return; // comando annullato nel frattempo
+      const s = (raw ?? '').replace(/\s+$/, '');
+      if (s.trim()) this.h.doc.edit('Testo', () => { this.h.doc.add(this.make(p, s)); });
+      this.h.done();
+    });
+  }
+
+  /** La prima riga sta sul punto cliccato, le altre scendono. */
+  private make(p: Vec, s: string): NewEnt {
+    return retext({ t: 'text' as const, p, s: '', h: this.hgt, rot: this.rot, ha: TextTool.ha, va: 'b' as const, layer: this.h.doc.current }, s);
+  }
+
+  cancel() { this.step = 'p'; this.p = null; }
 
   text(s: string): boolean {
     if (this.step === 'h') {
@@ -503,17 +521,6 @@ export class TextTool extends Tool {
       const a = parseAngle(s);
       if (a === null) return false;
       this.rot = a; this.askText(); return true;
-    }
-    if (this.step === 'txt' && this.p) {
-      if (!s) { this.h.done(); return true; }
-      const p = this.p;
-      this.h.doc.edit('Testo', () => {
-        this.h.doc.add({ t: 'text', p, s, h: this.hgt, rot: this.rot, ha: TextTool.ha, va: 'b', layer: this.h.doc.current });
-      });
-      this.p = add(p, mul(dirOf(this.rot - Math.PI / 2), this.hgt * 1.5));
-      this.typed = '';
-      this.askText();
-      return true;
     }
     return false;
   }
@@ -529,7 +536,7 @@ export class TextTool extends Tool {
   preview(p: Vec): NewEnt[] {
     const L = this.h.doc.current;
     if (this.step === 'txt' && this.p) {
-      return [{ t: 'text', p: this.p, s: this.typed || '|', h: this.hgt, rot: this.rot, ha: TextTool.ha, va: 'b', layer: L }];
+      return [this.make(this.p, this.typed || '|')];
     }
     if (this.step === 'p') return [{ t: 'text', p, s: 'Testo', h: this.hgt, rot: 0, ha: TextTool.ha, va: 'b', layer: L }];
     return [];

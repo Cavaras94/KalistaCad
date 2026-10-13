@@ -112,7 +112,12 @@ export interface DocData {
   settings: Settings;
   nextId: number;
   blocks?: Blocks;
+  cartiglio?: Cartiglio;
 }
+
+/** Scritte del cartiglio di stampa: stanno nel disegno, così ogni file ha le sue. */
+export interface Cartiglio { cliente: string; posa: string; note: string }
+export const emptyCartiglio = (): Cartiglio => ({ cliente: '', posa: '', note: '' });
 
 const MAX_UNDO = 100;
 
@@ -123,6 +128,7 @@ export class Doc {
   settings: Settings = defaultSettings();
   /** definizioni dei blocchi; ogni definizione si sostituisce intera, non si modifica sul posto */
   blocks: Blocks = {};
+  cartiglio: Cartiglio = emptyCartiglio();
   nextId = 1;
   /** cambia a ogni modifica: chi disegna lo usa per sapere quando ridisegnare */
   version = 0;
@@ -463,7 +469,14 @@ export class Doc {
       format: 'kalista', version: 1, ents: this.editing ? this.editing.ents : this.ents, layers: this.layers,
       current: this.current, settings: this.settings, nextId: this.nextId,
       ...(Object.keys(blocks).length ? { blocks } : {}),
+      ...(Object.values(this.cartiglio).some(Boolean) ? { cartiglio: this.cartiglio } : {}),
     };
+  }
+
+  /** Non passa dall'annulla: è un dato del file, come il suo nome. */
+  setCartiglio(c: Cartiglio) {
+    this.cartiglio = { ...c };
+    this.changed();
   }
 
   load(d: DocData) {
@@ -472,6 +485,7 @@ export class Doc {
     this.isolated = null;
     this.ents = d.ents ?? [];
     this.blocks = d.blocks ?? {};
+    this.cartiglio = { ...emptyCartiglio(), ...d.cartiglio };
     this.layers = d.layers?.length ? d.layers : defaultLayers();
     this.settings = { ...defaultSettings(d.settings?.units ?? 'cm'), ...d.settings };
     this.current = this.layers.some(l => l.name === d.current) ? d.current : this.layers[0].name;
@@ -490,6 +504,7 @@ export class Doc {
     this.isolated = null;
     this.ents = [];
     this.blocks = {};
+    this.cartiglio = emptyCartiglio();
     this.layers = defaultLayers();
     this.current = '0';
     this.settings = defaultSettings(units);

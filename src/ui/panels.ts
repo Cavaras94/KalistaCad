@@ -1,10 +1,10 @@
 // Pannelli laterali: proprietà della selezione e layer.
 import type { Ent, HatchPattern, HAlign } from '../model/entities';
-import { TYPE_NAMES, HATCH_NAMES, roomArea, dimValue, fmtNum } from '../model/entities';
+import { TYPE_NAMES, HATCH_NAMES, roomArea, dimValue, fmtNum, retext } from '../model/entities';
 import type { Doc, Layer, LineType } from '../model/document';
 import { LT_NAMES, UNIT_MM } from '../model/document';
 import { dist, angleOf, polygonArea } from '../model/geom';
-import { askText, confirmBox } from './dialogs';
+import { askText, confirmBox, growArea } from './dialogs';
 
 const LW_LIST = [0.05, 0.09, 0.13, 0.18, 0.25, 0.35, 0.5, 0.7, 1.0];
 
@@ -34,6 +34,8 @@ interface Field {
   set?: (e: Ent, v: string) => Ent | null;
   options?: [string, string][];
   single?: boolean;
+  /** testo su più righe: casella che cresce */
+  multi?: boolean;
 }
 
 function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
@@ -60,7 +62,7 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
     case 'window': return [{ label: 'Larghezza', kind: 'num', get: e => (e.t === 'window' ? e.w : 0), set: numSet('w') }];
     case 'circle': case 'arc': return [{ label: 'Raggio', kind: 'num', get: e => (e.t === 'circle' || e.t === 'arc' ? e.r : 0), set: numSet('r') }];
     case 'text': return [
-      { label: 'Testo', kind: 'text', get: e => (e.t === 'text' ? e.s : ''), set: (e, v) => (e.t === 'text' && v ? { ...e, s: v.replace(/\\n/g, '\n') } : null) },
+      { label: 'Testo', kind: 'text', multi: true, get: e => (e.t === 'text' ? e.s : ''), set: (e, v) => (e.t === 'text' && v.trim() ? retext(e, v.trimEnd()) : null) },
       { label: 'Altezza', kind: 'num', get: e => (e.t === 'text' ? e.h : 0), set: numSet('h') },
       { label: 'Rotazione °', kind: 'num', get: e => (e.t === 'text' ? Math.round(((e.rot * 180) / Math.PI) * 1000) / 1000 : 0), set: (e, v) => { const n = parse(v); return n === null || e.t !== 'text' ? null : { ...e, rot: (n * Math.PI) / 180 }; } },
       { label: 'Allineamento', kind: 'select', options: [['l', 'Sinistra'], ['c', 'Centro'], ['r', 'Destra']], get: e => (e.t === 'text' ? e.ha : 'l'), set: (e, v) => (e.t === 'text' ? { ...e, ha: v as HAlign } : null) },
@@ -69,12 +71,12 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
       { label: 'Altezza testo', kind: 'num', get: e => (e.t === 'dim' ? e.h ?? doc.settings.dimH : 0), set: numSet('h') },
       { label: 'Misura', kind: 'ro', single: true, get: e => { if (e.t !== 'dim') return ''; const x = dimValue(e); return x === null ? '' : fmt(x) + (e.k === 'ang' ? '°' : ''); } },
       {
-        label: 'Testo (vuoto = misura)', kind: 'text', get: e => (e.t === 'dim' ? e.s ?? '' : ''),
-        set: (e, v) => { if (e.t !== 'dim') return null; const c = { ...e }; if (v.trim()) c.s = v; else delete c.s; return c; },
+        label: 'Testo (vuoto = misura)', kind: 'text', multi: true, get: e => (e.t === 'dim' ? e.s ?? '' : ''),
+        set: (e, v) => { if (e.t !== 'dim') return null; const c = { ...e }; if (v.trim()) c.s = v.trim(); else delete c.s; return c; },
       },
     ];
     case 'room': return [
-      { label: 'Nome', kind: 'text', get: e => (e.t === 'room' ? e.name : ''), set: (e, v) => (e.t === 'room' ? { ...e, name: v } : null) },
+      { label: 'Nome', kind: 'text', multi: true, get: e => (e.t === 'room' ? e.name : ''), set: (e, v) => (e.t === 'room' ? { ...e, name: v.trim() } : null) },
       { label: 'Superficie m²', kind: 'ro', single: true, get: e => (e.t === 'room' ? fmtNum(roomArea(e) * toM2, 2) : '') },
     ];
     case 'point': return [];
@@ -84,7 +86,7 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
       { label: 'Rotazione °', kind: 'num', get: e => (e.t === 'image' ? Math.round(((e.rot * 180) / Math.PI) * 1000) / 1000 : 0), set: (e, v) => { const n = parse(v); return n === null || e.t !== 'image' ? null : { ...e, rot: (n * Math.PI) / 180 }; } },
     ];
     case 'leader': return [
-      { label: 'Testo', kind: 'text', get: e => (e.t === 'leader' ? e.s : ''), set: (e, v) => (e.t === 'leader' ? { ...e, s: v } : null) },
+      { label: 'Testo', kind: 'text', multi: true, get: e => (e.t === 'leader' ? e.s : ''), set: (e, v) => (e.t === 'leader' ? { ...e, s: v.trim() } : null) },
       { label: 'Altezza testo', kind: 'num', get: e => (e.t === 'leader' ? e.h ?? doc.settings.dimH : 0), set: numSet('h') },
     ];
     case 'ellipse': return [
@@ -220,8 +222,16 @@ export class Panels {
         c.checked = val === 'true';
         c.onchange = () => apply(String(c.checked));
         row.append(c);
+      } else if (f.multi) {
+        // testo su più righe: Invio va a capo, la casella cresce; vale uscendo dalla casella o con Ctrl+Invio
+        const i = growArea(same ? val : '', 1);
+        if (!same) i.placeholder = '— vari —';
+        i.onchange = () => apply(i.value);
+        i.onkeydown = ev => { if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); i.blur(); } ev.stopPropagation(); };
+        row.classList.add('multi');
+        row.append(i);
       } else {
-        const i = h('input', { type: 'text', value: same ? (f.kind === 'num' ? fmt(Number(val)) : val.replace(/\n/g, '\\n')) : '', placeholder: same ? '' : '— vari —' });
+        const i = h('input', { type: 'text', value: same ? (f.kind === 'num' ? fmt(Number(val)) : val) : '', placeholder: same ? '' : '— vari —' });
         i.onchange = () => apply(i.value);
         i.onkeydown = ev => { if (ev.key === 'Enter') { (ev.target as HTMLInputElement).blur(); } ev.stopPropagation(); };
         row.append(i);

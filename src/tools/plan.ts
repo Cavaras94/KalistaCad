@@ -488,8 +488,12 @@ export class DimBaselineTool extends Tool {
 export class LeaderTool extends Tool {
   readonly name = 'DIRETTRICE';
   private pts: Vec[] = [];
+  private writing = false;
+  private typed = '';
 
   start() { this.ask('Specificare la punta della freccia'); }
+
+  cancel() { this.writing = false; }
 
   point(p: Vec) {
     const n = this.pts.length;
@@ -500,7 +504,7 @@ export class LeaderTool extends Tool {
   }
 
   option(k: string) {
-    if (k !== 'A' || this.mode === 'text') return;
+    if (k !== 'A' || this.writing) return;
     this.pts.pop();
     const n = this.pts.length;
     this.base = this.pts[n - 1] ?? null;
@@ -510,20 +514,21 @@ export class LeaderTool extends Tool {
 
   enter() {
     if (this.pts.length < 2) { super.enter(); return; }
-    this.ask('Testo della direttrice', [], undefined, 'text');
-  }
-
-  text(raw: string): boolean {
-    if (this.mode !== 'text') return false;
+    // il testo si scrive in un riquadro a più righe, con l'anteprima accanto alla direttrice
+    this.writing = true; this.typed = '';
+    this.ask('Scrivere il testo nel riquadro (Invio = a capo, Ctrl+Invio = conferma)', [], undefined, 'none');
     const doc = this.h.doc;
     const pts = this.pts;
-    doc.edit('Direttrice', () => { doc.ensureLayer('QUOTE'); doc.add({ t: 'leader', pts, s: raw.trim(), layer: 'QUOTE' }); });
-    this.h.done();
-    return true;
+    void this.h.write({ title: 'Testo della direttrice', at: pts[pts.length - 1], onInput: s => { this.typed = s; this.h.refresh(); } }).then(raw => {
+      if (!this.writing || this.pts !== pts) return; // comando annullato nel frattempo
+      this.writing = false;
+      if (raw !== null) doc.edit('Direttrice', () => { doc.ensureLayer('QUOTE'); doc.add({ t: 'leader', pts, s: raw.trim(), layer: 'QUOTE' }); });
+      this.h.done();
+    });
   }
 
   preview(p: Vec): NewEnt[] {
-    if (!this.pts.length || this.mode === 'text') return this.pts.length > 1 ? [{ t: 'leader', pts: this.pts, s: '', layer: 'QUOTE' }] : [];
+    if (!this.pts.length || this.writing) return this.pts.length > 1 ? [{ t: 'leader', pts: this.pts, s: this.writing ? this.typed.trim() : '', layer: 'QUOTE' }] : [];
     return [{ t: 'leader', pts: [...this.pts, p], s: '', layer: 'QUOTE' }];
   }
 }

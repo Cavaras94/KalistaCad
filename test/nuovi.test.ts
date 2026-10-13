@@ -559,7 +559,7 @@ describe('immagini', () => {
   it('va in stampa come immagine, non nel DXF', () => {
     const doc = new Doc();
     doc.edit('t', () => { doc.add({ ...im, id: undefined }); doc.add({ t: 'line', a: v(0, 0), b: v(300, 0), layer: '0' }); });
-    const opts = { paper: 'A4', landscape: true, scale: 100, area: doc.extents()!, title: true, mono: true, lineweights: true, wallFill: 'nero', fields: { progetto: '', titolo: '', committente: '', indirizzo: '', disegnatore: '', data: '', tavola: '' }, logo: 'data:image/png;base64,BBBB' } as unknown as Parameters<typeof buildSheet>[1];
+    const opts = { paper: 'A4', landscape: true, scale: 100, area: doc.extents()!, title: true, mono: true, lineweights: true, wallFill: 'nero', fields: { cliente: '', posa: '', note: '' }, logo: 'data:image/png;base64,BBBB' } as unknown as Parameters<typeof buildSheet>[1];
     const svg = buildSheet(doc, opts).svg;
     expect((svg.match(/<image /g) ?? []).length).toBe(2);
     expect(svg).toContain('data:image/png;base64,AAAA');

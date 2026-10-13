@@ -112,6 +112,15 @@ export function textLines(p: { s: string; h: number; va: VAlign }): { s: string;
   return lines.map((s, i) => ({ s, y: y0 - i * step }));
 }
 
+/**
+ * Cambia la scritta di un testo tenendo ferma la prima riga: aggiungendo righe il testo cresce
+ * verso il basso, qualunque sia il suo allineamento verticale.
+ */
+export function retext<T extends { p: Vec; s: string; h: number; rot: number; va: VAlign }>(e: T, s: string): T {
+  const dy = textLines(e)[0].y - textLines({ ...e, s })[0].y;
+  return { ...e, s, p: v(e.p.x - Math.sin(e.rot) * dy, e.p.y + Math.cos(e.rot) * dy) };
+}
+
 export function textCorners(p: { p: Vec; s: string; h: number; rot: number; ha: HAlign; va: VAlign }): Vec[] {
   const lines = textLines(p);
   const W = Math.max(...lines.map(l => l.s.length), 1) * p.h * CHAR_W;

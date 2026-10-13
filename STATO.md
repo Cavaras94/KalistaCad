@@ -1,4 +1,4 @@
-# Kalista — stato del lavoro (12 ottobre 2026)
+# Kalista — stato del lavoro (13 ottobre 2026)
 
 Kalista (prima si chiamava Planimetrie): programma di disegno 2D per planimetrie, sul modello di DraftSight: stessi comandi, alias e tasti.
 Web app (TypeScript + Vite), gira nel browser.
@@ -8,7 +8,7 @@ Web app (TypeScript + Vite), gira nel browser.
 ```
 npm install
 npm run dev        # apre su http://localhost:5173
-npm test           # test unitari (148)
+npm test           # test unitari (155)
 npm run e2e        # collaudo in Chrome: digita i comandi come un utente
 npm run chiavetta  # prepara la versione da chiavetta in chiavetta/Kalista
 npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e in Edge
@@ -41,7 +41,7 @@ npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e i
 - Stampa: A4–A0, scala 1:1…1:5000 o adatta, cartiglio, spessori in mm, PDF dal browser.
   Verificata la scala esatta (500 cm a 1:100 = 50 mm) e il formato del PDF.
 
-Collaudo nel browser: 133 controlli su 133 passano. Versione da chiavetta: 10 su 10 (Chrome ed Edge).
+Collaudo nel browser: 160 controlli su 160 passano. Versione da chiavetta: 10 su 10 (Chrome ed Edge).
 
 ## Versioni
 
@@ -49,6 +49,9 @@ La versione è quella di `package.json` e compare in alto a sinistra accanto al 
 si legge anche la data), nella prima riga della riga di comando, in F1 e nel LEGGIMI della chiavetta.
 Prima di distribuire una copia nuova: aumentare la versione in `package.json`, poi `crea-chiavetta.bat`.
 
+- 0.4.0 (13 ottobre 2026): testi su più righe in un riquadro che cresce, cartiglio nuovo (Nome
+  cliente, Posa gres, Note) salvato nel disegno, Nuovo da file base e Salva con nome in barra
+  (vedi "Versione 0.4.0" più sotto).
 - 0.3.0 (12 ottobre 2026): tutte le funzioni che mancavano rispetto a DraftSight e le richieste
   arrivate per mail (vedi "Versione 0.3.0" più sotto), poi una seconda revisione completa.
 - 0.2.1 (12 ottobre 2026): correzioni dopo una revisione completa del codice (vedi "Revisione del 12
@@ -64,6 +67,23 @@ Prima di distribuire una copia nuova: aumentare la versione in `package.json`, p
 - `crea-chiavetta.bat`: prepara `chiavetta/Kalista`, la cartella da copiare sulla chiavetta. Sui PC dei
   ragazzi basta un doppio clic su `Kalista.html`: niente installazione, niente rete. La cartella va
   rigenerata dopo ogni modifica al programma.
+
+## Versione 0.4.0: cosa c'è di nuovo
+
+- **Testi su più righe**: TESTO, DIRETTRICE e il doppio clic su un testo aprono un riquadro accanto al
+  punto, che cresce in altezza e larghezza con quello che si scrive. Invio va a capo; Ctrl+Invio, OK
+  o un clic fuori confermano; Esc annulla. Nel disegno si vede l'anteprima mentre si scrive. Non si
+  scrive più `\n`. La prima riga resta sul punto cliccato e le altre scendono (`retext`).
+  Nel pannello Proprietà il testo è una casella a più righe (vale uscendo dalla casella o con Ctrl+Invio).
+- **Cartiglio**: tre voci, NOME CLIENTE, POSA GRES e NOTE; tolte scala, data, tavola e disegnatore.
+  Caselle a più righe: gli a capo scritti restano, le righe lunghe vanno a capo da sole e se il testo
+  è tanto il carattere si riduce per farlo stare nella casella (`fitCell`). Le scritte ora stanno nel
+  disegno (`doc.cartiglio`) e si salvano con lui: ogni file ha le sue. Foglio, scala, colori e logo
+  restano preferenze del browser.
+- **File base**: NUOVODA (pulsante "Nuovo da un file base") apre un disegno come copia senza nome: al
+  primo Salva viene chiesto il nome del file nuovo (proposto: il nome del cliente) e il file base non
+  viene toccato. "Salva con nome" ha un pulsante in barra (prima solo Ctrl+Maiusc+S). Apri tiene il
+  riferimento al file (dove il browser lo permette), così Salva riscrive quello senza chiedere dove.
 
 ## Versione 0.3.0: cosa c'è di nuovo
 

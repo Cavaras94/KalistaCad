@@ -30,6 +30,8 @@ export interface Host {
   choose(title: string, items: { key: string; label: string; on: boolean }[]): Promise<Record<string, boolean> | null>;
   /** fa scegliere un file di immagine; w e h sono in pixel. null se si rinuncia */
   pickImage(): Promise<{ src: string; w: number; h: number } | null>;
+  /** riquadro per scrivere un testo su più righe, vicino al punto `at` del disegno; null se annullato */
+  write(o: { title: string; value?: string; at?: Vec; onInput?: (s: string) => void }): Promise<string | null>;
 }
 
 export abstract class Tool {

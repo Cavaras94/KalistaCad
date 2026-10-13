@@ -1,6 +1,6 @@
 // Applicazione: vista, input, riga di comando, file.
 import type { Ent, NewEnt, PrimCtx, SnapKind } from '../model/entities';
-import { prims, grips, entBox, flatEnts } from '../model/entities';
+import { prims, grips, entBox, flatEnts, retext } from '../model/entities';
 import { Doc, DocData, UNIT_LABEL } from '../model/document';
 import { buildWallCtx } from '../model/walls';
 import { Vec, Box, v, dist, boxOf, sub, angleOf, len, emptyBox, boxUnion, boxValid, same } from '../model/geom';
@@ -16,7 +16,7 @@ import { findCommand, suggest, COMMANDS } from './commands';
 import { icon } from './icons';
 import { logo, VERSION, VERSION_LONG } from './logo';
 import { Panels } from './panels';
-import { settingsDialog, helpDialog, printDialog, confirmBox, askText, importUnitsDialog, chooseDialog, pickImageFile } from './dialogs';
+import { settingsDialog, helpDialog, printDialog, confirmBox, askText, importUnitsDialog, chooseDialog, pickImageFile, writeBox } from './dialogs';
 import { exportDxf } from '../io/dxf-export';
 import { importDxf, importDwg } from '../io/files';
 import type { ImportResult } from '../io/importer';
@@ -145,6 +145,15 @@ export class App implements Host {
 
   choose(title: string, items: { key: string; label: string; on: boolean }[]) { return chooseDialog(title, items); }
   pickImage() { return pickImageFile(); }
+  write(o: { title: string; value?: string; at?: Vec; onInput?: (s: string) => void }) {
+    let at: { x: number; y: number } | undefined;
+    if (o.at) {
+      // sotto il punto, così sopra resta visibile l'anteprima nel disegno
+      const s = this.view.toScreen(o.at), r = $('overlay').getBoundingClientRect();
+      at = { x: r.left + s.x, y: r.top + s.y + 18 };
+    }
+    return writeBox({ ...o, at });
+  }
 
   pick(p: Vec, filter?: (e: Ent) => boolean): Ent | null {
     return pickAt(this.doc, p, this.tol(), e => this.doc.isEditable(e) && (!filter || filter(e)));
@@ -584,7 +593,7 @@ export class App implements Host {
     c.addEventListener('dblclick', e => {
       if (e.button !== 0 || this.tool) return;
       const hit = this.pick(this.view.toWorld(this.screenPt(e).x, this.screenPt(e).y));
-      if (hit && (hit.t === 'text' || hit.t === 'room' || hit.t === 'dim')) this.editText(hit);
+      if (hit && (hit.t === 'text' || hit.t === 'room' || hit.t === 'dim' || hit.t === 'leader')) this.editText(hit);
     });
 
     this.input.addEventListener('keydown', e => this.onCmdKey(e));
@@ -934,16 +943,20 @@ export class App implements Host {
   }
 
   private async editText(e: Ent) {
-    const cur = e.t === 'text' ? e.s : e.t === 'room' ? e.name : e.t === 'dim' ? e.s ?? '' : '';
-    const label = e.t === 'room' ? 'Nome del locale' : e.t === 'dim' ? 'Testo della quota (vuoto = misura)' : 'Testo (\\n = a capo)';
-    const val = await askText('Modifica testo', label, cur.replace(/\n/g, '\\n'));
-    if (val === null) return;
-    const s = val.replace(/\\n/g, '\n');
-    const upd = { ...e } as Ent;
-    if (upd.t === 'text') { if (!s.trim()) return; upd.s = s; }
-    else if (upd.t === 'room') upd.name = s;
-    else if (upd.t === 'dim') { if (s.trim()) upd.s = s; else delete upd.s; }
-    this.doc.edit('Modifica testo', () => this.doc.replace([upd]));
+    // tutti in un riquadro a più righe, accanto al testo: Invio va a capo
+    const cur = e.t === 'text' || e.t === 'leader' ? e.s : e.t === 'room' ? e.name : e.t === 'dim' ? e.s ?? '' : '';
+    const title = e.t === 'room' ? 'Nome del locale' : e.t === 'dim' ? 'Testo della quota (vuoto = misura)' : e.t === 'leader' ? 'Testo della direttrice' : 'Modifica testo';
+    const at = e.t === 'text' || e.t === 'dim' ? e.p : e.t === 'leader' ? e.pts[e.pts.length - 1] : undefined;
+    const val = await this.write({ title, value: cur, at });
+    if (val === null || !this.doc.byId(e.id)) return;
+    const s = val.trimEnd();
+    let next: Ent;
+    if (e.t === 'text') { if (!s.trim()) return; next = retext(e, s); }
+    else if (e.t === 'leader') next = { ...e, s: s.trim() };
+    else if (e.t === 'room') next = { ...e, name: s.trim() };
+    else if (e.t === 'dim') { next = { ...e }; if (s.trim()) next.s = s.trim(); else delete next.s; }
+    else return;
+    this.doc.edit('Modifica testo', () => this.doc.replace([next]));
   }
 
   // ================================================================ azioni
@@ -974,6 +987,7 @@ export class App implements Host {
       case 'import': this.pickFile('import'); break;
       case 'save': this.save(false); break;
       case 'saveas': this.save(true); break;
+      case 'newfrom': this.pickFile('base'); break;
       case 'dxfout': this.exportDxfFile(); break;
       case 'print': this.openPrint(); break;
       case 'layer': $('layers-panel').scrollIntoView({ behavior: 'smooth' }); $('layers-panel').classList.add('flash'); setTimeout(() => $('layers-panel').classList.remove('flash'), 800); break;
@@ -1033,7 +1047,7 @@ export class App implements Host {
   private buildToolbar() {
     const bar = $('toolbar');
     const groups: [string, [string, string, string][]][] = [
-      ['File', [['new', 'NEW', 'Nuovo (Ctrl+N)'], ['open', 'OPEN', 'Apri disegno, DXF o DWG (Ctrl+O)'], ['save', 'SAVE', 'Salva (Ctrl+S)'], ['import', 'IMPORT', 'Importa DXF/DWG nel disegno'], ['export', 'DXFOUT', 'Esporta DXF'], ['print', 'PRINT', 'Stampa (Ctrl+P)']]],
+      ['File', [['new', 'NEW', 'Nuovo (Ctrl+N)'], ['newfrom', 'NEWFROM', 'Nuovo da un file base: lo apre come copia senza nome, il file base resta com\'è (NUOVODA)'], ['open', 'OPEN', 'Apri disegno, DXF o DWG (Ctrl+O)'], ['save', 'SAVE', 'Salva sullo stesso file (Ctrl+S)'], ['saveas', 'SAVEAS', 'Salva con nome: in un file nuovo (Ctrl+Maiusc+S)'], ['import', 'IMPORT', 'Importa DXF/DWG nel disegno'], ['export', 'DXFOUT', 'Esporta DXF'], ['print', 'PRINT', 'Stampa (Ctrl+P)']]],
       ['', [['undo', 'UNDO', 'Annulla (Ctrl+Z)'], ['redo', 'REDO', 'Ripristina (Ctrl+Y)']]],
       ['Disegno', [['line', 'LINE', 'Linea (L)'], ['pline', 'PLINE', 'Polilinea (PL)'], ['rect', 'RECTANGLE', 'Rettangolo (REC)'], ['circle', 'CIRCLE', 'Cerchio (C)'], ['arc', 'ARC', 'Arco (A)'], ['polygon', 'POLYGON', 'Poligono (POL)'], ['ellipse', 'ELLIPSE', 'Ellisse (EL)'], ['spline', 'SPLINE', 'Spline (SPL)'], ['point', 'POINT', 'Punto (PUNTO)'], ['text', 'TEXT', 'Testo (T)'], ['hatch', 'HATCH', 'Tratteggio e retini (H)'], ['image', 'IMAGE', 'Inserisci immagine JPG o PNG (IMMAGINE)']]],
       ['Planimetria', [['wall', 'WALL', 'Muro (MURO)'], ['door', 'DOOR', 'Porta (PORTA)'], ['window', 'WINDOW', 'Finestra (FINESTRA)'], ['room', 'ROOM', 'Locale con superficie (LOCALE)']]],
@@ -1144,7 +1158,7 @@ export class App implements Host {
       const raw = localStorage.getItem(AUTOSAVE_KEY);
       if (!raw) return false;
       const d = JSON.parse(raw) as { name: string; doc: DocData };
-      if (!d.doc?.ents?.length) return false;
+      if (!d.doc?.ents?.length && !Object.values(d.doc?.cartiglio ?? {}).some(Boolean)) return false;
       this.doc.load(d.doc);
       this.doc.dirty = true;
       this.fileName = d.name || 'Senza nome';
@@ -1156,7 +1170,7 @@ export class App implements Host {
   }
 
   private async newDoc() {
-    if (this.doc.dirty && this.doc.ents.length && !(await confirmBox('Nuovo disegno', 'Il disegno corrente ha modifiche non salvate. Continuare e perderle?'))) return;
+    if (this.doc.dirty && this.hasWork() && !(await confirmBox('Nuovo disegno', 'Il disegno corrente ha modifiche non salvate. Continuare e perderle?'))) return;
     this.doc.reset(this.doc.settings.units);
     this.fileHandle = null;
     this.fileName = 'Senza nome';
@@ -1167,20 +1181,40 @@ export class App implements Host {
     this.msg('Nuovo disegno.');
   }
 
-  private pickMode: 'open' | 'import' = 'open';
+  /** base = nuovo disegno a partire da un file, che viene aperto come copia senza nome */
+  /** c'è qualcosa da perdere: entità, o scritte del cartiglio */
+  private hasWork() { return this.doc.ents.length > 0 || Object.values(this.doc.cartiglio).some(Boolean); }
 
-  private async pickFile(mode: 'open' | 'import') {
-    if (mode === 'open' && this.doc.dirty && this.doc.ents.length && !(await confirmBox('Apri', 'Il disegno corrente ha modifiche non salvate. Continuare e perderle?'))) return;
+  private pickMode: 'open' | 'import' | 'base' = 'open';
+
+  private async pickFile(mode: 'open' | 'import' | 'base') {
+    if (mode !== 'import' && this.doc.dirty && this.hasWork() && !(await confirmBox(mode === 'base' ? 'Nuovo da file base' : 'Apri', 'Il disegno corrente ha modifiche non salvate. Continuare e perderle?'))) return;
     this.pickMode = mode;
+    const w = window as unknown as { showOpenFilePicker?: (o: unknown) => Promise<FileHandle[]> };
+    if (mode === 'open' && w.showOpenFilePicker) {
+      // con il selettore del browser resta il riferimento al file: Salva lo riscrive senza chiedere dove
+      try {
+        const [h] = await w.showOpenFilePicker({ types: [{ description: 'Disegni (Kalista, DXF, DWG)', accept: { 'application/json': ['.kalista', '.planim', '.json'], 'image/vnd.dxf': ['.dxf'], 'image/vnd.dwg': ['.dwg'] } }] });
+        await this.openFile(await h.getFile(), h);
+        return;
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+        // selettore non disponibile in questo contesto: si passa a quello classico
+      }
+    }
     const inp = $<HTMLInputElement>('file-input');
-    inp.accept = mode === 'open' ? '.kalista,.planim,.json,.dxf,.dwg' : '.dxf,.dwg';
+    inp.accept = mode === 'import' ? '.dxf,.dwg' : '.kalista,.planim,.json,.dxf,.dwg';
     inp.value = '';
     inp.click();
   }
 
   private async onFilePicked(e: Event) {
     const f = (e.target as HTMLInputElement).files?.[0];
-    if (!f) return;
+    if (f) await this.openFile(f, null);
+  }
+
+  private async openFile(f: File, handle: FileHandle | null) {
+    const base = this.pickMode === 'base';
     const ext = f.name.toLowerCase().split('.').pop() ?? '';
     try {
       const buf = await f.arrayBuffer();
@@ -1189,10 +1223,13 @@ export class App implements Host {
         this.setSelection([]);
         this.forgetDrawing();
         this.doc.load(d);
-        this.fileHandle = null;
-        this.fileName = f.name.replace(/\.(kalista|planim|json)$/i, '');
+        // un file base si apre come copia senza nome: al primo Salva viene chiesto dove, e lui resta com'è
+        this.fileHandle = base ? null : handle;
+        this.fileName = base ? 'Senza nome' : f.name.replace(/\.(kalista|planim|json)$/i, '');
         this.selection.clear();
-        this.msg(`Aperto ${f.name}: ${this.doc.ents.length} entità.`);
+        this.msg(base
+          ? `Nuovo disegno dal file base ${f.name} (${this.doc.ents.length} entità). Il file base non viene toccato: al primo Salva verrà chiesto il nome del nuovo file.`
+          : `Aperto ${f.name}: ${this.doc.ents.length} entità.`);
         this.zoomExtents();
         this.updateStatus();
         return;
@@ -1207,12 +1244,12 @@ export class App implements Host {
         if (!src) { this.msg(`Importazione di ${f.name} annullata.`); return; }
         r = rescaleImport(r, src, docUnits);
       }
-      if (this.pickMode === 'open') {
+      if (this.pickMode !== 'import') {
         this.setSelection([]);
         this.forgetDrawing();
         this.doc.reset(this.doc.settings.units);
         this.fileHandle = null;
-        this.fileName = f.name.replace(/\.(dxf|dwg)$/i, '');
+        this.fileName = base ? 'Senza nome' : f.name.replace(/\.(dxf|dwg)$/i, '');
       }
       this.mergeImport(r, f.name);
       this.zoomExtents();
@@ -1256,16 +1293,19 @@ export class App implements Host {
   private async save(as: boolean) {
     const data = JSON.stringify(this.doc.toData());
     const w = window as unknown as { showSaveFilePicker?: (o: unknown) => Promise<FileHandle> };
+    // a un disegno ancora senza nome si propone quello del cliente scritto nel cartiglio
+    const client = this.doc.cartiglio.cliente.split('\n')[0].replace(/[\\/:*?"<>|]/g, ' ').trim().replace(/[. ]+$/, '');
+    const suggested = this.fileName === 'Senza nome' && client ? client : this.fileName;
     try {
       if (!as && this.fileHandle) {
         await this.writeHandle(this.fileHandle, data);
       } else if (w.showSaveFilePicker) {
-        const h = await w.showSaveFilePicker({ suggestedName: `${this.fileName}.kalista`, types: [{ description: 'Disegno Kalista', accept: { 'application/json': ['.kalista'] } }] });
+        const h = await w.showSaveFilePicker({ suggestedName: `${suggested}.kalista`, types: [{ description: 'Disegno Kalista', accept: { 'application/json': ['.kalista'] } }] });
         await this.writeHandle(h, data);
         this.fileHandle = h;
         this.fileName = (h.name as string).replace(/\.(kalista|planim)$/i, '');
       } else {
-        const name = as || this.fileName === 'Senza nome' ? await askText('Salva', 'Nome del file', this.fileName) : this.fileName;
+        const name = as || this.fileName === 'Senza nome' ? await askText('Salva', 'Nome del file', suggested) : this.fileName;
         if (!name) return;
         this.fileName = name.replace(/\.(kalista|planim)$/i, '');
         this.download(`${this.fileName}.kalista`, data, 'application/json');

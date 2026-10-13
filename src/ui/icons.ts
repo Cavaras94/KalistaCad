@@ -1,6 +1,8 @@
 // Icone 20×20 a tratto.
 const I: Record<string, string> = {
   new: '<path d="M5 2h7l4 4v12H5z M12 2v4h4"/>',
+  newfrom: '<path d="M5 2h7l4 4v12H5z M12 2v4h4 M8 12h5 M10.500 9.500v5"/>',
+  saveas: '<path d="M3 3h11l3 3v5 M3 3v14h7 M6 3v5h7V3 M13 15h6 M16 12v6"/>',
   open: '<path d="M2 6h6l2 2h8v9H2z"/>',
   save: '<path d="M3 3h11l3 3v11H3z M6 3v5h7V3 M6 17v-5h8v5"/>',
   import: '<path d="M10 2v10 M6 8l4 4 4-4 M3 13v4h14v-4"/>',

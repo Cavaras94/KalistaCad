@@ -68,6 +68,96 @@ export function askText(title: string, label: string, value = ''): Promise<strin
   });
 }
 
+/** Casella a più righe che cresce con quello che si scrive (wide = anche in larghezza). */
+export function growArea(value: string, rows = 1, wide = false): HTMLTextAreaElement {
+  const ta = el('textarea', { rows: String(rows), spellcheck: 'false' });
+  ta.value = value;
+  const fit = () => {
+    if (!ta.isConnected) return;
+    if (wide) {
+      // larga quanto la riga più lunga (il limite sta nel foglio di stile)
+      ta.style.width = '';
+      ta.style.width = `${Math.max(ta.offsetWidth, ta.scrollWidth + 8)}px`;
+    }
+    ta.style.height = 'auto';
+    ta.style.height = `${ta.scrollHeight + 2}px`;
+  };
+  ta.addEventListener('input', fit);
+  setTimeout(fit, 0);
+  return ta;
+}
+
+export interface WriteOpts {
+  title: string;
+  value?: string;
+  /** punto dello schermo sotto cui mettere il riquadro (al centro se manca) */
+  at?: { x: number; y: number };
+  /** chiamata a ogni tasto, per l'anteprima nel disegno */
+  onInput?: (s: string) => void;
+}
+
+/**
+ * Riquadro per scrivere un testo su più righe: Invio va a capo, Ctrl+Invio o un clic fuori
+ * confermano, Esc annulla. Restituisce null se si annulla.
+ */
+export function writeBox(o: WriteOpts): Promise<string | null> {
+  return new Promise(resolve => {
+    const back = el('div', { class: 'write-back' });
+    const ta = growArea(o.value ?? '', 2, true);
+    ta.cols = 28;
+    ta.setAttribute('wrap', 'off');
+    const ok = el('button', { class: 'primary' }, 'OK');
+    const no = el('button', {}, 'Annulla');
+    const box = el('div', { class: 'write-box', role: 'dialog', 'aria-label': o.title },
+      el('div', { class: 'write-title' }, o.title), ta,
+      el('div', { class: 'write-foot' }, el('small', {}, 'Invio = a capo · Ctrl+Invio = conferma · Esc = annulla'), no, ok));
+    let done = false;
+    const finish = (val: string | null) => {
+      if (done) return;
+      done = true;
+      back.remove();
+      document.removeEventListener('keydown', onKey, true);
+      resolve(val);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') { e.preventDefault(); finish(null); }
+      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); finish(ta.value); }
+      else if (e.key === 'Tab') {
+        const ring: HTMLElement[] = [ta, no, ok];
+        const i = ring.indexOf(document.activeElement as HTMLElement);
+        e.preventDefault();
+        ring[(i + (e.shiftKey ? ring.length - 1 : 1) + ring.length) % ring.length].focus();
+      }
+    };
+    // il riquadro resta dentro la finestra anche quando cresce
+    const place = () => {
+      const r = box.getBoundingClientRect();
+      const x = o.at ? o.at.x : (window.innerWidth - r.width) / 2;
+      const y = o.at ? o.at.y : (window.innerHeight - r.height) / 2;
+      box.style.left = `${Math.max(8, Math.min(x, window.innerWidth - r.width - 8))}px`;
+      box.style.top = `${Math.max(8, Math.min(y, window.innerHeight - r.height - 8))}px`;
+    };
+    ta.addEventListener('input', () => { o.onInput?.(ta.value); setTimeout(place, 0); });
+    ok.onclick = () => finish(ta.value);
+    no.onclick = () => finish(null);
+    // Un clic fuori conferma: solo col tasto sinistro, premuto e rilasciato fuori, e non nel primo
+    // istante (il secondo colpo di un doppio clic che ha appena aperto il riquadro non deve chiuderlo).
+    const opened = Date.now();
+    let downOut = false;
+    back.onmousedown = e => { downOut = e.target === back && e.button === 0 && Date.now() - opened > 400; };
+    back.onclick = e => { if (downOut && e.target === back) finish(ta.value); downOut = false; };
+    // il clic destro non deve arrivare al disegno, dove vale Invio
+    back.oncontextmenu = e => e.preventDefault();
+    // (Tab, in onKey, gira fra casella, Annulla e OK senza uscire dal riquadro)
+    back.append(box);
+    document.getElementById('dialog-root')!.append(back);
+    document.addEventListener('keydown', onKey, true);
+    place();
+    setTimeout(() => { place(); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 0);
+  });
+}
+
 export function confirmBox(title: string, text: string, ok = 'Continua'): Promise<boolean> {
   return new Promise(resolve => {
     let done = false;
@@ -282,6 +372,8 @@ export function helpDialog() {
     ['Rotella', 'zoom; premuta e trascinata = pan; doppio clic = zoom estensioni'],
     ['Selezione', 'da sinistra a destra = finestra (solo ciò che è dentro); da destra a sinistra = intersezione; Maiusc+clic toglie'],
     ['Grip', 'clic su un quadratino blu della selezione per stirarlo'],
+    ['Testi', 'si scrivono in un riquadro: Invio va a capo, Ctrl+Invio conferma; doppio clic su un testo per modificarlo'],
+    ['File base', 'NUOVODA apre un disegno come copia senza nome: salvando si crea un file nuovo e il file base resta com\'è'],
   ];
   const t = el('table');
   for (const [k, d] of tips) t.append(el('tr', {}, el('td', { class: 'mono' }, k), el('td', {}, d)));
@@ -293,16 +385,14 @@ export function helpDialog() {
 
 const PRINT_KEY = 'planimetrie.stampa';
 
-interface SavedPrint { paper: Paper; landscape: boolean; scale: number; mono: boolean; lineweights: boolean; wallFill: WallFill; title: boolean; fields: TitleFields; logo?: string }
+// Le scritte del cartiglio non stanno qui: sono del disegno (doc.cartiglio) e si salvano con lui.
+interface SavedPrint { paper: Paper; landscape: boolean; scale: number; mono: boolean; lineweights: boolean; wallFill: WallFill; title: boolean; logo?: string }
 
 function loadPrint(): SavedPrint {
-  const def: SavedPrint = {
-    paper: 'A3', landscape: true, scale: 100, mono: true, lineweights: true, wallFill: 'grigio', title: true,
-    fields: { progetto: '', titolo: 'Pianta', committente: '', indirizzo: '', disegnatore: '', data: new Date().toLocaleDateString('it-IT'), tavola: '1' },
-  };
+  const def: SavedPrint = { paper: 'A3', landscape: true, scale: 100, mono: true, lineweights: true, wallFill: 'grigio', title: true };
   try {
     const s = JSON.parse(localStorage.getItem(PRINT_KEY) ?? 'null');
-    if (s) return { ...def, ...s, fields: { ...def.fields, ...s.fields, data: def.fields.data } }; // la data riparte sempre da oggi
+    if (s) { delete s.fields; return { ...def, ...s }; } // "fields": le scritte che le versioni fino alla 0.3 tenevano qui
   } catch { /* preferenze non disponibili */ }
   return def;
 }
@@ -340,13 +430,18 @@ export function printDialog(doc: Doc, areas: { ext: Box | null; view: Box; win: 
   sel('Muri', [['grigio', 'Campitura grigia'], ['nero', 'Campitura nera'], ['vuoto', 'Solo contorno']], o.wallFill, v => { o.wallFill = v as WallFill; });
   sel('Cartiglio', [['1', 'Sì'], ['0', 'No']], o.title ? '1' : '0', v => { o.title = v === '1'; });
 
-  const fl: [keyof TitleFields, string][] = [['progetto', 'Progetto'], ['titolo', 'Oggetto'], ['committente', 'Committente'], ['indirizzo', 'Indirizzo'], ['disegnatore', 'Disegnatore'], ['data', 'Data'], ['tavola', 'Tavola']];
+  const fields: TitleFields = { ...doc.cartiglio };
+  let pending = false;
+  const fl: [keyof TitleFields, string][] = [['cliente', 'Nome cliente'], ['posa', 'Posa gres'], ['note', 'Note']];
   const tf = el('div', { class: 'title-fields' });
   for (const [k, label] of fl) {
-    const i = el('input', { type: 'text', value: o.fields[k] });
-    i.oninput = () => { o.fields[k] = i.value; schedule(); };
+    // caselle a più righe: Invio va a capo e la casella cresce con il testo
+    const i = growArea(fields[k], k === 'note' ? 3 : 1);
+    // il disegno si aggiorna insieme all'anteprima, non a ogni tasto
+    i.oninput = () => { fields[k] = i.value; pending = true; schedule(); };
     tf.append(el('label', { class: 'field' }, el('span', {}, label), i));
   }
+  tf.append(el('small', {}, 'Invio va a capo. Queste scritte si salvano insieme al disegno.'));
   form.append(tf);
   // logo nel cartiglio
   const logoBtn = el('button', { class: 'small' }, o.logo ? 'Cambia logo…' : 'Aggiungi logo (JPG, PNG)…');
@@ -369,9 +464,11 @@ export function printDialog(doc: Doc, areas: { ext: Box | null; view: Box; win: 
   const schedule = () => { clearTimeout(timer); timer = window.setTimeout(update, 200); };
   const opts = (): PrintOpts => ({
     ...o,
+    fields,
     area: areaKind === 'win' && areas.win ? areas.win : areaKind === 'ext' && areas.ext ? areas.ext : areas.view,
   });
   function update() {
+    if (pending) { pending = false; doc.setCartiglio(fields); }
     const sh = buildSheet(doc, opts());
     current = sh.svg;
     preview.innerHTML = sh.svg;
@@ -394,7 +491,7 @@ export function printDialog(doc: Doc, areas: { ext: Box | null; view: Box; win: 
       label: 'Scarica SVG', onClick: () => {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([current], { type: 'image/svg+xml' }));
-        a.download = `${o.fields.titolo || 'tavola'}.svg`;
+        a.download = `${fields.cliente.split('\n')[0].replace(/[\\/:*?"<>|]/g, ' ').trim() || 'tavola'}.svg`;
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 5000);
         return false;

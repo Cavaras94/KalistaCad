@@ -98,6 +98,7 @@ export const COMMANDS: CmdDef[] = [
   { name: 'LIST', aliases: ['LI', 'LS', 'LISTA'], label: 'Lista', group: 'Informazioni', make: h => new ListTool(h) },
 
   { name: 'NEW', aliases: ['NUOVO'], label: 'Nuovo', group: 'File', action: 'new', keys: 'Ctrl+N' },
+  { name: 'NEWFROM', aliases: ['NUOVODA', 'FILEBASE', 'MODELLO'], label: 'Nuovo da un file base', group: 'File', action: 'newfrom' },
   { name: 'OPEN', aliases: ['APRI'], label: 'Apri (anche DXF e DWG)', group: 'File', action: 'open', keys: 'Ctrl+O' },
   { name: 'SAVE', aliases: ['QSAVE', 'SALVA'], label: 'Salva', group: 'File', action: 'save', keys: 'Ctrl+S' },
   { name: 'SAVEAS', aliases: ['SALVACOME'], label: 'Salva con nome', group: 'File', action: 'saveas', keys: 'Ctrl+Maiusc+S' },

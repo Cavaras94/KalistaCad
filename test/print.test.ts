@@ -3,7 +3,7 @@ import { Doc } from '../src/model/document';
 import { buildSheet, fitScale, PrintOpts } from '../src/print/sheet';
 import { v } from '../src/model/geom';
 
-const fields = { progetto: 'Casa', titolo: 'Pianta', committente: '', indirizzo: '', disegnatore: '', data: '', tavola: '1' };
+const fields = { cliente: 'Rossi', posa: 'Pianta', note: '' };
 
 function opts(doc: Doc, scale: number): PrintOpts {
   return { paper: 'A3', landscape: true, scale, area: doc.extents()!, mono: true, lineweights: true, wallFill: 'grigio', title: true, fields };
@@ -19,7 +19,7 @@ describe('stampa', () => {
     const m = sh.svg.match(/<path d="M([\d.]+) ([\d.]+)L([\d.]+) ([\d.]+)"/)!;
     expect(parseFloat(m[3]) - parseFloat(m[1])).toBeCloseTo(50, 6);
     expect(sh.svg).toContain('width="420mm" height="297mm"');
-    expect(sh.svg).toContain('1:100');
+    expect(sh.scale).toBe(100);
   });
   it('in millimetri: 5000 mm a 1:50 = 100 mm', () => {
     const d = new Doc();

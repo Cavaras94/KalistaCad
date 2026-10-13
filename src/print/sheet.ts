@@ -1,7 +1,7 @@
 // Tavola di stampa in SVG con dimensioni in millimetri reali.
 import type { Prim } from '../model/entities';
 import { textLines } from '../model/entities';
-import type { Doc } from '../model/document';
+import type { Doc, Cartiglio } from '../model/document';
 import { LT_PATTERNS, UNIT_MM } from '../model/document';
 import { Box, sweep, polar, boxOverlap } from '../model/geom';
 import { entPrims, entBoxCached, drawList } from '../view/render';
@@ -11,15 +11,7 @@ export const PAPERS: Record<Paper, [number, number]> = { A4: [210, 297], A3: [29
 export const STD_SCALES = [1, 2, 5, 10, 20, 25, 50, 75, 100, 125, 200, 250, 500, 1000, 2000, 5000];
 export type WallFill = 'grigio' | 'nero' | 'vuoto';
 
-export interface TitleFields {
-  progetto: string;
-  titolo: string;
-  committente: string;
-  indirizzo: string;
-  disegnatore: string;
-  data: string;
-  tavola: string;
-}
+export type TitleFields = Cartiglio;
 
 export interface PrintOpts {
   paper: Paper;
@@ -109,7 +101,7 @@ export function buildSheet(doc: Doc, o: PrintOpts): Sheet {
     for (const p of entPrims(e, ctx)) out.push(primSvg(p, X, Y, k, color, strokeAttr, wallFill));
   }
 
-  const tb = o.title ? titleBlock(W, H, scale, o.fields, o.logo) : '';
+  const tb = o.title ? titleBlock(W, H, o.fields, o.logo) : '';
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}mm" height="${H}mm" viewBox="0 0 ${W} ${H}" font-family="Arial, Helvetica, sans-serif">
 <rect x="0" y="0" width="${W}" height="${H}" fill="#fff"/>
 <defs><clipPath id="vp"><rect x="${f(vp.x)}" y="${f(vp.y)}" width="${f(vp.w)}" height="${f(vp.h)}"/></clipPath></defs>
@@ -160,28 +152,67 @@ function primSvg(p: Prim, X: (x: number) => number, Y: (y: number) => number, k:
   }
 }
 
-function titleBlock(W: number, H: number, scale: number, t: TitleFields, logo?: string): string {
+/** Larghezza stimata di una scritta in Arial, in altezze di carattere: le maiuscole sono più larghe. */
+export function textEm(s: string): number {
+  let w = 0;
+  for (const c of s) w += /[MWmw@%]/.test(c) ? 0.9 : /[A-Z0-9ÀÈÉÌÒÙ]/.test(c) ? 0.72 : /[ .,;:'!|ilIjtfr()\-]/.test(c) ? 0.34 : 0.57;
+  return w;
+}
+
+/** Spezza una riga troppo lunga agli spazi; una parola più lunga della riga viene tagliata. */
+function wrapLine(s: string, max: number): string[] {
+  const out: string[] = [];
+  let cur = '';
+  for (let w of s.split(' ')) {
+    while (textEm(w) > max) {
+      if (cur) { out.push(cur); cur = ''; }
+      let n = 1;
+      while (n < w.length && textEm(w.slice(0, n + 1)) <= max) n++;
+      out.push(w.slice(0, n));
+      w = w.slice(n);
+    }
+    if (!cur) cur = w;
+    else if (textEm(cur + ' ' + w) <= max) cur += ' ' + w;
+    else { out.push(cur); cur = w; }
+  }
+  out.push(cur);
+  return out;
+}
+
+/**
+ * Righe di una casella del cartiglio: gli a capo sono quelli scritti, le righe lunghe si spezzano,
+ * e se il testo non ci sta il carattere si riduce fino a farcelo stare.
+ */
+export function fitCell(value: string, cw: number, ch: number, base: number): { size: number; lines: string[] } {
+  const src = value.replace(/\s+$/, '').split('\n');
+  for (let size = base; ; size *= 0.9) {
+    const max = (cw - 2.4) / size;
+    const lines = src.flatMap(l => wrapLine(l.trimEnd(), max));
+    const room = Math.max(1, Math.floor((ch - 3.4) / (size * 1.2)));
+    if (lines.length <= room || size <= 1.3) return { size, lines: lines.slice(0, room) };
+  }
+}
+
+function titleBlock(W: number, H: number, t: TitleFields, logo?: string): string {
   const full = Math.min(TB_W, W - 2 * MARGIN);
   const xb = W - MARGIN - full, y0 = H - MARGIN - TB_H;
   // con il logo, la prima parte del cartiglio è un riquadro per lui
   const lw = logo ? Math.min(TB_H * 1.4, full * 0.3) : 0;
   const w = full - lw, x0 = xb + lw;
-  const left = w * 0.66;
-  const cell = (x: number, y: number, cw: number, ch: number, label: string, value: string, size: number) =>
-    `<rect x="${f(x)}" y="${f(y)}" width="${f(cw)}" height="${f(ch)}" fill="none" stroke="#000" stroke-width="0.25"/>` +
-    `<text x="${f(x + 1.2)}" y="${f(y + 2.4)}" font-size="1.8" fill="#444">${esc(label)}</text>` +
-    `<text x="${f(x + 1.2)}" y="${f(y + ch - 1.6)}" font-size="${size}" fill="#000">${esc(value)}</text>`;
-  const rh = TB_H / 4;
+  const left = w * 0.5;
+  const cell = (x: number, y: number, cw: number, ch: number, label: string, value: string, base: number) => {
+    const { size, lines } = fitCell(value ?? '', cw, ch, base);
+    return `<rect x="${f(x)}" y="${f(y)}" width="${f(cw)}" height="${f(ch)}" fill="none" stroke="#000" stroke-width="0.25"/>` +
+      `<text x="${f(x + 1.2)}" y="${f(y + 2.4)}" font-size="1.8" fill="#444">${esc(label)}</text>` +
+      lines.map((l, i) => `<text x="${f(x + 1.2)}" y="${f(y + 3.2 + size * (0.9 + i * 1.2))}" font-size="${f(size)}" fill="#000">${esc(l)}</text>`).join('');
+  };
+  const top = TB_H * 0.42;
   const parts = [
     `<rect x="${f(xb)}" y="${f(y0)}" width="${f(full)}" height="${TB_H}" fill="#fff" stroke="#000" stroke-width="0.5"/>`,
     ...(logo ? [`<image href="${esc(logo)}" x="${f(xb + 1.5)}" y="${f(y0 + 1.5)}" width="${f(lw - 3)}" height="${f(TB_H - 3)}" preserveAspectRatio="xMidYMid meet"/>`] : []),
-    cell(x0, y0, left, rh, 'PROGETTO', t.progetto, 3),
-    cell(x0, y0 + rh, left, rh * 2, 'OGGETTO', t.titolo, 5),
-    cell(x0, y0 + rh * 3, left, rh, 'COMMITTENTE / INDIRIZZO', [t.committente, t.indirizzo].filter(Boolean).join(' – '), 2.6),
-    cell(x0 + left, y0, w - left, rh, 'SCALA', `1:${scale}`, 3.2),
-    cell(x0 + left, y0 + rh, w - left, rh, 'DATA', t.data, 3),
-    cell(x0 + left, y0 + rh * 2, w - left, rh, 'TAVOLA', t.tavola, 3.2),
-    cell(x0 + left, y0 + rh * 3, w - left, rh, 'DISEGNATORE', t.disegnatore, 2.8),
+    cell(x0, y0, left, top, 'NOME CLIENTE', t.cliente, 5),
+    cell(x0, y0 + top, left, TB_H - top, 'POSA GRES', t.posa, 4.5),
+    cell(x0 + left, y0, w - left, TB_H, 'NOTE', t.note, 3.2),
   ];
   return parts.join('\n');
 }
