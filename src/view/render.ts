@@ -1,6 +1,6 @@
 // Disegno delle primitive su canvas.
 import type { Ent, InsertE, Prim, PrimCtx } from '../model/entities';
-import { prims, primsBox, textLines, expandInsert, CHAR_W } from '../model/entities';
+import { prims, primsBox, textLines, insertParts, CHAR_W } from '../model/entities';
 import type { Doc, Layer } from '../model/document';
 import { LT_PATTERNS, UNIT_MM } from '../model/document';
 import { Box, TAU, boxOverlap, boxValid } from '../model/geom';
@@ -37,7 +37,7 @@ const kidsCache = new WeakMap<Ent, { ctx: PrimCtx; kids: Ent[] }>();
 export function insertKids(e: InsertE, ctx: PrimCtx): Ent[] {
   const c = kidsCache.get(e);
   if (c && c.ctx === ctx) return c.kids;
-  const kids = ctx.blocks?.[e.name] ? expandInsert(e, ctx.blocks) : [e];
+  const kids = ctx.blocks?.[e.name] ? insertParts(e, ctx.blocks) : [e];
   kidsCache.set(e, { ctx, kids });
   return kids;
 }

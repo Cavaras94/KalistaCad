@@ -4,9 +4,9 @@ import {
   sweep, normAng, bulgeArc, tessArc, seg, arcC, arcStart, arcEnd, arcMid, polygonArea, centroid, clipLineToLoops,
   emptyBox, boxAdd, apply, applyDir, det, matScale, mapAngle, lineLine, compose, translate, rotateAbout, scaleAbout,
 } from './geom';
-import type { WallCtx } from './walls';
+import type { WallCtx, WallInfo } from './walls';
 import type { LineType } from './document';
-import { wallPrims } from './walls';
+import { wallPrims, buildWallCtx } from './walls';
 
 export type HAlign = 'l' | 'c' | 'r';
 export type VAlign = 'b' | 'm' | 't';
@@ -297,8 +297,37 @@ function dimPrims(e: DimE, ctx: PrimCtx): Prim[] {
   return out;
 }
 
+/**
+ * Giunzioni dei muri e aperture per il contenuto dei blocchi inseriti. Le entità di un blocco aperto
+ * hanno tutte l'id dell'inserimento, quindi non possono stare nel contesto dei muri del disegno
+ * (che va per id): il risultato si tiene qui, legato all'oggetto.
+ */
+const blockWalls = new WeakMap<Ent, { wall?: WallInfo; th?: number }>();
+
+/** Spessore del muro che ospita l'apertura, se ce n'è uno. */
+function hostTh(e: DoorE | WindowE, ctx: PrimCtx): number | undefined {
+  return blockWalls.get(e)?.th ?? ctx.walls?.openTh.get(e.id);
+}
+
+/**
+ * Contenuto di un blocco inserito pronto da disegnare: i suoi muri si giuntano fra loro e le sue
+ * porte e finestre li aprono, come quando erano entità sciolte.
+ */
+export function insertParts(e: InsertE, blocks: Blocks | undefined): Ent[] {
+  const kids = expandInsert(e, blocks);
+  if (!kids.some(k => k.t === 'wall')) return kids;
+  // numeri provvisori al posto dell'id comune, solo per calcolare le giunzioni
+  const wc = buildWallCtx(kids.map((k, i) => ({ ...k, id: i + 1 })));
+  kids.forEach((k, i) => {
+    if (k.t === 'wall') blockWalls.set(k, { wall: wc.walls.get(i + 1) });
+    else if ((k.t === 'door' || k.t === 'window') && wc.openTh.has(i + 1)) blockWalls.set(k, { th: wc.openTh.get(i + 1) });
+  });
+  return kids;
+}
+
 function doorPrims(e: DoorE, ctx: PrimCtx): Prim[] {
-  const th = ctx.walls?.openTh.get(e.id) ?? e.th;
+  const host = hostTh(e, ctx);
+  const th = host ?? e.th;
   const u = dirOf(e.ang), n = perp(u);
   const hinge = add(add(e.p, mul(u, (e.hg * e.w) / 2)), mul(n, (e.sw * th) / 2));
   const leafDir = mul(n, e.sw);
@@ -308,7 +337,7 @@ function doorPrims(e: DoorE, ctx: PrimCtx): Prim[] {
   const aClosed = Math.atan2(closedDir.y, closedDir.x);
   const [a0, a1] = Math.abs(normAng(aClosed - aLeaf) - Math.PI / 2) < 1e-6 ? [aLeaf, aClosed] : [aClosed, aLeaf];
   const out: Prim[] = [{ k: 'pl', pts: [hinge, tip] }, { k: 'arc', c: hinge, r: e.w, a0, a1 }];
-  if (!ctx.walls?.openTh.has(e.id)) out.push(...openingJambs(e.p, u, n, e.w, th));
+  if (host === undefined) out.push(...openingJambs(e.p, u, n, e.w, th));
   return out;
 }
 
@@ -320,12 +349,13 @@ function openingJambs(p: Vec, u: Vec, n: Vec, w: number, th: number): Prim[] {
 }
 
 function windowPrims(e: WindowE, ctx: PrimCtx): Prim[] {
-  const th = ctx.walls?.openTh.get(e.id) ?? e.th;
+  const host = hostTh(e, ctx);
+  const th = host ?? e.th;
   const u = dirOf(e.ang), n = perp(u);
   const a = sub(e.p, mul(u, e.w / 2)), b = add(e.p, mul(u, e.w / 2));
   const out: Prim[] = [];
   for (const off of [th / 2, th / 6, -th / 6, -th / 2]) out.push({ k: 'pl', pts: [add(a, mul(n, off)), add(b, mul(n, off))] });
-  if (!ctx.walls?.openTh.has(e.id)) out.push(...openingJambs(e.p, u, n, e.w, th));
+  if (host === undefined) out.push(...openingJambs(e.p, u, n, e.w, th));
   return out;
 }
 
@@ -517,7 +547,7 @@ export function expandInsert(e: InsertE, blocks: Blocks | undefined, deep = true
 /** Elenco da disegnare: le entità date, con gli inserimenti sostituiti dal loro contenuto. */
 export function flatEnts(ents: readonly Ent[], blocks: Blocks | undefined): Ent[] {
   if (!ents.some(e => e.t === 'insert')) return ents as Ent[];
-  return ents.flatMap(e => (e.t === 'insert' ? expandInsert(e, blocks) : [e]));
+  return ents.flatMap(e => (e.t === 'insert' ? insertParts(e, blocks) : [e]));
 }
 
 function insertPrims(e: InsertE, ctx: PrimCtx): Prim[] {
@@ -527,7 +557,7 @@ function insertPrims(e: InsertE, ctx: PrimCtx): Prim[] {
     return [{ k: 'pl', pts: [v(e.p.x - h, e.p.y - h), v(e.p.x + h, e.p.y + h)] }, { k: 'pl', pts: [v(e.p.x - h, e.p.y + h), v(e.p.x + h, e.p.y - h)] }];
   }
   const inner: PrimCtx = { ...ctx, walls: undefined };
-  return expandInsert(e, ctx.blocks).flatMap(c => prims(c, inner));
+  return insertParts(e, ctx.blocks).flatMap(c => prims(c, inner));
 }
 
 export function prims(e: Ent, ctx: PrimCtx = DEFAULT_CTX): Prim[] {
@@ -538,7 +568,7 @@ export function prims(e: Ent, ctx: PrimCtx = DEFAULT_CTX): Prim[] {
     case 'arc': return [{ k: 'arc', c: e.c, r: e.r, a0: e.a0, a1: e.a1 }];
     case 'text': return [{ k: 'text', p: e.p, s: e.s, h: e.h, rot: e.rot, ha: e.ha, va: e.va }];
     case 'dim': return dimPrims(e, ctx);
-    case 'wall': return wallPrims(e, ctx.walls);
+    case 'wall': return wallPrims(e, ctx.walls, blockWalls.get(e)?.wall);
     case 'door': return doorPrims(e, ctx);
     case 'window': return windowPrims(e, ctx);
     case 'room': return roomPrims(e, ctx);

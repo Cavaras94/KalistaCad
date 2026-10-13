@@ -8,7 +8,7 @@ Web app (TypeScript + Vite), gira nel browser.
 ```
 npm install
 npm run dev        # apre su http://localhost:5173
-npm test           # test unitari (156)
+npm test           # test unitari (157)
 npm run e2e        # collaudo in Chrome: digita i comandi come un utente
 npm run chiavetta  # prepara la versione da chiavetta in chiavetta/Kalista
 npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e in Edge
@@ -49,6 +49,8 @@ La versione è quella di `package.json` e compare in alto a sinistra accanto al 
 si legge anche la data), nella prima riga della riga di comando, in F1 e nel LEGGIMI della chiavetta.
 Prima di distribuire una copia nuova: aumentare la versione in `package.json`, poi `crea-chiavetta.bat`.
 
+- 0.4.2 (13 ottobre 2026): i muri dentro un blocco restano giuntati agli angoli e porte e finestre
+  continuano ad aprirli (prima, creato il blocco, ogni muro tornava un rettangolo a sé).
 - 0.4.1 (13 ottobre 2026): stampa di una finestra corretta (si stampa solo la finestra, adattata al
   foglio; si sceglie con due clic o trascinando) e stampa dei soli oggetti selezionati; icona del PAN
   (una mano) diversa da quella di SPOSTA; freccetta o clic destro su GRIGLIA, SNAP, POLARE ed ESNAP

@@ -1,6 +1,6 @@
 // Versione 0.4: testi su più righe, cartiglio con le scritte nel disegno.
 import { describe, it, expect } from 'vitest';
-import { retext, textLines } from '../src/model/entities';
+import { retext, textLines, prims } from '../src/model/entities';
 import { Doc } from '../src/model/document';
 import { v } from '../src/model/geom';
 import { buildSheet, fitCell, textEm, PrintOpts } from '../src/print/sheet';
@@ -37,6 +37,32 @@ describe('testi su più righe', () => {
       const e = retext(a, 'x\ny\nz\nw');
       expect(firstLine(e).y).toBeCloseTo(firstLine(a).y, 9);
     }
+  });
+});
+
+describe('muri dentro un blocco', () => {
+  it('si giuntano agli angoli e le porte li aprono, come da sciolti', () => {
+    const d = new Doc();
+    d.edit('x', () => {
+      d.add({ t: 'wall', a: v(0, 0), b: v(500, 0), th: 30, layer: '0' });
+      d.add({ t: 'wall', a: v(500, 0), b: v(500, 400), th: 30, layer: '0' });
+      d.add({ t: 'door', p: v(250, 0), ang: 0, w: 80, th: 30, sw: 1, hg: 1, layer: '0' });
+    });
+    const sig = () => {
+      const ctx = d.ctx();
+      const ps = d.ents.flatMap(e => prims(e, ctx));
+      const pts = ps.flatMap(p => (p.k === 'pl' ? p.pts : p.k === 'area' ? p.loops.flat() : []));
+      return { n: ps.length, pts: pts.map(p => p.x.toFixed(3) + ',' + p.y.toFixed(3)).sort().join(' ') };
+    };
+    const loose = sig();
+    const ents = d.ents.map(e => ({ ...e }));
+    d.edit('blocco', () => {
+      d.blocks = { casa: { ents } };
+      d.remove(ents.map(e => e.id));
+      d.add({ t: 'insert', name: 'casa', p: v(0, 0), s: 1, rot: 0, layer: '0' });
+    });
+    expect(d.ents.length).toBe(1);
+    expect(sig()).toEqual(loose);
   });
 });
 

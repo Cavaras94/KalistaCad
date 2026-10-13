@@ -146,11 +146,11 @@ function subtract(lo: number, hi: number, gaps: [number, number][]): [number, nu
   return out;
 }
 
-export function wallPrims(w: WallE, ctx?: WallCtx): Prim[] {
+export function wallPrims(w: WallE, ctx?: WallCtx, own?: WallInfo): Prim[] {
   const L = dist(w.a, w.b);
   if (L < 1e-9) return [];
   const { u, n, h } = axes(w);
-  const inf: WallInfo = ctx?.walls.get(w.id) ?? {
+  const inf: WallInfo = own ?? ctx?.walls.get(w.id) ?? {
     sl: add(w.a, mul(n, h)), sr: sub(w.a, mul(n, h)), el: add(w.b, mul(n, h)), er: sub(w.b, mul(n, h)),
     capS: true, capE: true, cuts: [], cutsL: [], cutsR: [],
   };
