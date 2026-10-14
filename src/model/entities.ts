@@ -729,6 +729,11 @@ export function primsBox(ps: Prim[], e?: Ent): Box {
     }
   }
   if (e?.t === 'dim') { boxAdd(b, e.a); boxAdd(b, e.b); }
+  // porte e finestre occupano tutto il vano, anche dalla parte dove non apre (per snap e selezione)
+  if (e?.t === 'door' || e?.t === 'window') {
+    const u = mul(dirOf(e.ang), e.w / 2), n = mul(perp(dirOf(e.ang)), e.th / 2);
+    for (const q of [add(u, n), sub(u, n), add(mul(u, -1), n), sub(mul(u, -1), n)]) boxAdd(b, add(e.p, q));
+  }
   return b;
 }
 
@@ -775,13 +780,24 @@ export function snapPoints(e: Ent, ctx: PrimCtx = DEFAULT_CTX): SnapPt[] {
       // resta agganciabile, ma lì vicino vincono gli spigoli che si vedono
       const inf = blockWalls.get(e)?.wall ?? ctx.walls?.walls.get(e.id);
       out.push({ p: e.a, k: 'end', low: !!inf && !inf.capS }, { p: e.b, k: 'end', low: !!inf && !inf.capE });
-      P(mid(e.a, e.b), 'mid');
+      // il medio dei due fili, da spigolo a spigolo: è lì che si appoggiano mobili e sanitari; quello
+      // dell'asse, dentro lo spessore, resta ma lì vicino vincono quelli dei fili
+      const n = perp(norm(sub(e.b, e.a)));
+      const h = e.th / 2;
+      const faces: [Vec, Vec][] = inf ? [[inf.sl, inf.el], [inf.sr, inf.er]] : [[add(e.a, mul(n, h)), add(e.b, mul(n, h))], [sub(e.a, mul(n, h)), sub(e.b, mul(n, h))]];
+      for (const [a, b] of faces) P(mid(a, b), 'mid');
+      out.push({ p: mid(e.a, e.b), k: 'mid', low: true });
       for (const p of prims(e, ctx)) if (p.k === 'pl' && p.stroke !== false && !p.deco) p.pts.forEach(q => P(q, 'end'));
       break;
     }
     case 'door': case 'window': {
-      const u = dirOf(e.ang);
-      P(e.p, 'mid'); P(add(e.p, mul(u, e.w / 2)), 'end'); P(sub(e.p, mul(u, e.w / 2)), 'end');
+      // come per i muri: medio e spigoli del vano su tutti e due i fili del muro, oltre che sull'asse
+      const u = dirOf(e.ang), n = perp(u), h = (hostTh(e, ctx) ?? e.th) / 2;
+      for (const s of [1, -1]) {
+        const f = add(e.p, mul(n, s * h));
+        P(f, 'mid'); P(add(f, mul(u, e.w / 2)), 'end'); P(sub(f, mul(u, e.w / 2)), 'end');
+      }
+      out.push({ p: e.p, k: 'mid', low: true }, { p: add(e.p, mul(u, e.w / 2)), k: 'end', low: true }, { p: sub(e.p, mul(u, e.w / 2)), k: 'end', low: true });
       break;
     }
     case 'room': e.pts.forEach(p => P(p, 'end')); if (e.pts.length > 2) P(centroid(e.pts), 'cen'); break;

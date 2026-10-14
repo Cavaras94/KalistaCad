@@ -8,7 +8,7 @@ Web app (TypeScript + Vite), gira nel browser.
 ```
 npm install
 npm run dev        # apre su http://localhost:5173
-npm test           # test unitari (169)
+npm test           # test unitari (171)
 npm run e2e        # collaudo in Chrome: digita i comandi come un utente
 npm run chiavetta  # prepara la versione da chiavetta in chiavetta/Kalista
 npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e in Edge
@@ -52,6 +52,11 @@ La versione è quella di `package.json` e compare in alto a sinistra accanto al 
 si legge anche la data), nella prima riga della riga di comando, in F1 e nel LEGGIMI della chiavetta.
 Prima di distribuire una copia nuova: aumentare la versione in `package.json`, poi `crea-chiavetta.bat`.
 
+- 0.4.6 (14 ottobre 2026): snap sui fili di muri, porte e finestre. Il Medio di un muro c'è sul filo
+  sinistro e sul destro, da spigolo a spigolo (per appoggiare un blocco, un mobile, un sanitario al
+  muro: prima c'era solo quello dell'asse, dentro lo spessore); porte e finestre hanno medio e spigoli
+  del vano su tutti e due i fili. Quelli sull'asse restano, ma lì vicino vincono quelli dei fili.
+  L'ingombro di una porta copre tutto il vano, anche dalla parte dove non apre.
 - 0.4.5 (14 ottobre 2026): finestre di dialogo per i comandi (vedi "Versione 0.4.5" più sotto);
   MURO, tornando con un clic sul punto di partenza la stanza si chiude e l'ultimo angolo viene
   giuntato come gli altri (con le misure interne restava aperto); corretti i difetti trovati con una

@@ -734,3 +734,31 @@ describe('muri con il retino: si tiene modificandoli', () => {
     expect(prims(solid).some(p => p.k === 'pl' && p.fill === 'solid')).toBe(true);
   });
 });
+
+describe('snap sui fili di muri, porte e finestre', () => {
+  const st: SnapSettings = { osnap: true, modes: new Set(['end', 'mid']), gridSnap: false, ortho: false, polar: false, polarInc: 45, otrack: false };
+  const doc = new Doc();
+  doc.edit('t', () => {
+    // muro da 30 sull'asse y = 0, da x = 0 a 400, con un muro che sale dall'angolo in x = 400
+    doc.add({ t: 'wall', a: v(0, 0), b: v(400, 0), th: 30, layer: 'MURI' });
+    doc.add({ t: 'wall', a: v(400, 0), b: v(400, 300), th: 30, layer: 'MURI' });
+    doc.add({ t: 'door', p: v(100, 0), ang: 0, w: 80, th: 30, sw: 1, hg: 1, layer: 'SERRAMENTI' });
+  });
+  const at = (x: number, y: number, only?: 'mid' | 'end') => findSnap(doc, v(x, y), 12, st, undefined, undefined, only ? { only } : {}).p;
+  const near = (p: { x: number; y: number }, x: number, y: number) => { close(p.x, x); close(p.y, y); };
+  it('il medio di un muro c\'è su tutti e due i fili, da spigolo a spigolo; quello dell\'asse resta per chi ci va sopra', () => {
+    // filo interno da (0,15) a (385,15), filo esterno da (0,-15) a (415,-15)
+    near(at(195, 10), 192.5, 15);
+    near(at(205, -10), 207.5, -15);
+    near(at(200, 1), 200, 0);
+    // MED digitato: basta essere sul muro, e si ha il medio più vicino al cursore
+    near(at(150, 14, 'mid'), 192.5, 15);
+    near(at(250, -14, 'mid'), 207.5, -15);
+  });
+  it('porte e finestre: medio e spigoli del vano su tutti e due i fili', () => {
+    near(at(101, 12), 100, 15);
+    near(at(99, -12), 100, -15);
+    near(at(141, 13), 140, 15);
+    near(at(59, -13), 60, -15);
+  });
+});
