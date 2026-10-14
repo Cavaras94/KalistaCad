@@ -1328,6 +1328,14 @@ export class App implements Host {
     inp.click();
   }
 
+  /** File aperto con un doppio clic (o con "Apri con"), con Kalista installata come app. */
+  async openLaunched(h: FileHandle) {
+    const f: File = await h.getFile();
+    if (this.doc.dirty && this.hasWork() && !(await confirmBox('Apri', `Il disegno corrente ha modifiche non salvate. Aprire ${f.name} e perderle?`))) return;
+    this.pickMode = 'open';
+    await this.openFile(f, h);
+  }
+
   private async onFilePicked(e: Event) {
     const f = (e.target as HTMLInputElement).files?.[0];
     if (f) await this.openFile(f, null);

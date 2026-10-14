@@ -41,7 +41,9 @@ const swap = (re, text) => {
 swap(/<script type="module"[^>]*src="[^"]*"[^>]*><\/script>/, '');
 swap(/<link rel="stylesheet"[^>]*>/, `<style>${css}</style>`);
 swap(/<\/body>/, `<script type="module">${js}</script>\n</body>`);
-if (/(src|href)="\.\/assets\//.test(html)) throw new Error('Kalista.html fa ancora riferimento a file esterni.');
+// manifest e icone servono all'app installabile dal sito, non a una pagina aperta da disco
+html = html.replace(/<link rel="(manifest|apple-touch-icon)"[^>]*>\s*/g, '');
+if (/(src|href)="\.\/(assets\/|manifest|apple-touch)/.test(html)) throw new Error('Kalista.html fa ancora riferimento a file esterni.');
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });

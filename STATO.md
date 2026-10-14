@@ -44,7 +44,7 @@ npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e i
 - Stampa: A4–A0, scala 1:1…1:5000 o adatta, cartiglio, spessori in mm, PDF dal browser.
   Verificata la scala esatta (500 cm a 1:100 = 50 mm) e il formato del PDF.
 
-Collaudo nel browser: 210 controlli su 210 passano. Versione da chiavetta: 12 su 12 (Chrome ed Edge).
+Collaudo nel browser: 214 controlli su 214 passano. Versione da chiavetta: 12 su 12 (Chrome ed Edge).
 
 ## Versioni
 
@@ -299,6 +299,19 @@ difetto riprodotto con uno script prima di correggerlo. Corretti:
   una lettera con un menu del pannello attivo cambiava layer; Ctrl+S faceva perdere il comando in corso.
 
 ## Note
+
+- App installabile (PWA, 14 ottobre 2026): online su https://cavaras94.github.io/KalistaCad/, pubblicata
+  da GitHub Actions a ogni push su master (prima tsc e test unitari). Manifest e icone in `public/`
+  (icone rifatte dal logo con `node scripts/icone.mjs`); service worker scritto dalla build
+  (`vite.config.ts`, modello in `src/pwa/sw.template.js`) con l'elenco di tutti i file, LibreDWG
+  compreso: dopo la prima apertura funziona senza rete. Una versione nuova si scarica da sola e si
+  usa dalla riapertura successiva (il programma lo scrive nella riga di comando). Installata, apre
+  .kalista/.dxf/.dwg con un doppio clic (`file_handlers` nel manifest, `launchQueue` in `main.ts`).
+  Nella chiavetta il service worker non c'è (pagina aperta da disco) e i link al manifest si tolgono.
+- Il collaudo, nella parte della versione compilata, imposta NODE_ENV=production: il server di
+  sviluppo avviato prima lo lascia a development e la build verrebbe quella di sviluppo.
+- Copia senza rete: le risposte si cercano ignorando l'intestazione Vary (`ignoreVary`), se no con
+  certi server la copia c'è ma non viene trovata.
 
 - Progetto pubblico e libero (14 ottobre 2026): https://github.com/Cavaras94/KalistaCad, licenza
   GPL-3.0 o successiva (file `LICENSE`). La scelta è obbligata da LibreDWG, che è GPL-3.0 ed è

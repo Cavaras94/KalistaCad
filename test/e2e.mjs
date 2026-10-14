@@ -1208,6 +1208,8 @@ check('nessun errore in console', errors.length === 0, errors.join(' | '));
 await server.close();
 
 // ---- versione compilata
+// il server di sviluppo di prima ha lasciato NODE_ENV=development: la build sarebbe quella di sviluppo
+process.env.NODE_ENV = 'production';
 await build({ logLevel: 'error' });
 const pv = await preview({ preview: { port: 5197, strictPort: false }, logLevel: 'error' });
 const errs2 = [];
@@ -1219,6 +1221,25 @@ await p2.waitForSelector('#prompt');
 check('versione compilata: si apre', (await p2.textContent('#prompt')) === 'Comando:');
 const buildDwg = await tryDwg(p2);
 check('versione compilata: DWG caricato, errore esplicito', /codice LibreDWG \d+/.test(buildDwg), buildDwg);
+// app installabile (PWA): manifest con le icone e i file che apre, copia per lavorare senza rete
+const mf = await p2.evaluate(async () => {
+  const m = await (await fetch('./manifest.webmanifest')).json();
+  const icons = await Promise.all(m.icons.map(async i => (await fetch(i.src)).ok));
+  return { name: m.short_name, display: m.display, icons, kalista: JSON.stringify(m.file_handlers ?? []).includes('.kalista'), linked: !!document.querySelector('link[rel="manifest"]') };
+});
+check('app installabile: manifest collegato, con nome, finestra propria, icone e file .kalista', mf.linked && mf.name === 'Kalista' && mf.display === 'standalone' && mf.icons.length >= 3 && mf.icons.every(Boolean) && mf.kalista, JSON.stringify(mf));
+await p2.waitForFunction(() => navigator.serviceWorker.ready.then(() => true), null, { timeout: 60000 });
+await p2.waitForFunction(async () => (await caches.keys()).some(k => k.startsWith('kalista-')) && (await (await caches.open((await caches.keys()).find(k => k.startsWith('kalista-')))).keys()).length >= 10, null, { timeout: 60000, polling: 300 });
+await p2.reload();
+await p2.waitForSelector('#prompt');
+check('app installabile: dopo la prima apertura la copia del programma è pronta', await p2.evaluate(() => !!navigator.serviceWorker.controller));
+await p2.context().setOffline(true);
+await p2.reload();
+await p2.waitForSelector('#prompt');
+check('senza rete: il programma si apre lo stesso', (await p2.textContent('#prompt')) === 'Comando:');
+const offDwg = await tryDwg(p2);
+check('senza rete: anche il lettore DWG si carica', /codice LibreDWG \d+/.test(offDwg), offDwg);
+await p2.context().setOffline(false);
 check('versione compilata: nessun errore in console', errs2.length === 0, errs2.join(' | '));
 await pv.close();
 

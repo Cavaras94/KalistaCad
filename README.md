@@ -4,6 +4,14 @@
 
 I comandi, gli alias e i tasti sono quelli di DraftSight e AutoCAD (L, PL, REC, M, CO, TR, OFFSET, F3, F8…), con i nomi anche in italiano (LINEA, MURO, PORTA, QUOTA…). Chi preferisce le finestre di dialogo può usarle; chi è abituato alla riga di comando può spegnerle in Impostazioni.
 
+## Usarlo subito
+
+**https://cavaras94.github.io/KalistaCad/**: si apre nel browser, senza scaricare niente.
+
+Con Chrome o Edge lo si può anche **installare come app**: pulsante "Installa" nella barra dell'indirizzo (o menu ⋮ → "Installa Kalista"). Così ha la sua icona sul desktop e nel menu Start, si apre in una finestra propria, funziona anche senza Internet e i file `.kalista` (e DXF/DWG, con "Apri con") si aprono con un doppio clic. Gli aggiornamenti arrivano da soli: la versione nuova si scarica alla prima apertura con la rete e si usa da quella successiva.
+
+I disegni restano sul computer di chi li fa: si salvano come file `.kalista`, niente viene mandato in rete.
+
 ## Cosa fa
 
 - **Disegno**: linee, polilinee con archi, rettangoli, cerchi, archi, ellissi, spline, testi su più righe, retini (pieno, 45°, mattoni, listoni, spina di pesce, piastrelle, calcestruzzo, isolante…).
@@ -24,6 +32,10 @@ npm run dev        # apre su http://localhost:5173
 ```
 
 Su Windows basta un doppio clic su `avvia.bat`: la prima volta installa quello che serve, poi avvia il programma e apre il browser.
+
+## Pubblicazione
+
+A ogni push su `master` GitHub controlla i tipi, fa girare i test e pubblica la versione nuova su GitHub Pages (`.github/workflows/pages.yml`). Le icone dell'app sono in `public/` e si rifanno dal logo con `node scripts/icone.mjs`.
 
 ## Versione da chiavetta
 
