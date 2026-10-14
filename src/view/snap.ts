@@ -118,14 +118,14 @@ function snapCore(doc: Doc, world: Vec, tol: number, st: SnapSettings, base?: Ve
     const ctx = doc.ctx();
     const cands = nearEnts(doc, world, tol).filter(e => !exclude?.has(e.id));
     let best: { p: Vec; k: SnapKind; score: number } | null = null;
-    const offer = (p: Vec, k: SnapKind) => {
+    const offer = (p: Vec, k: SnapKind, low = false) => {
       if (!st.modes.has(k)) return;
       const d = dist(p, world);
       if (d > tol) return;
-      const score = d / tol + PRIORITY[k];
+      const score = d / tol + PRIORITY[k] + (low ? 0.3 : 0);
       if (!best || score < best.score) best = { p, k, score };
     };
-    for (const e of cands) for (const sp of snapPoints(e, ctx)) offer(sp.p, sp.k);
+    for (const e of cands) for (const sp of snapPoints(e, ctx)) offer(sp.p, sp.k, sp.low);
     if (st.modes.has('int') || st.modes.has('perp') || st.modes.has('near')) {
       const curves: Curve[] = [];
       for (const e of cands) {

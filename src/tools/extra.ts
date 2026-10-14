@@ -451,7 +451,7 @@ export class LayerDeleteTool extends Tool {
     this.target = name;
     const n = this.h.doc.layerUse(name);
     if (!n) { this.apply(); return true; }
-    this.ask(`Il layer ${name} contiene ${n} entità: passeranno sul layer 0. Eliminarlo?`, [O('S', 'Sì'), O('N', 'No')], 'N', 'none');
+    this.askYesNo(`Il layer ${name} contiene ${n} entità: passeranno sul layer 0. Eliminarlo?`, 'N');
     return true;
   }
 

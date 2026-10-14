@@ -36,7 +36,10 @@ for (const exe of browsers.filter(p => existsSync(p))) {
   const brand = await page.textContent('.brand');
   check(`${who}: mostra la versione ${version}`, brand.includes(`v${version}`) && (await page.textContent('#history')).includes(`Kalista ${version} del `), brand);
   const kb = page.keyboard;
-  for (const s of ['MURO', '0,0', '500,0', '500,400', 'C']) { await kb.type(s); await kb.press('Enter'); }
+  await kb.type('MURO'); await kb.press('Enter');
+  check(`${who}: MURO apre la finestra con le impostazioni e i retini disegnati`, (await page.locator('.modal .tile canvas').count()) > 10, String(await page.locator('.modal .tile').count()));
+  await kb.press('Enter'); // OK con i valori proposti
+  for (const s of ['0,0', '500,0', '500,400', 'C']) { await kb.type(s); await kb.press('Enter'); }
   await kb.type('LISTA'); await kb.press('Enter');
   await kb.press('Control+a');
   const side = await page.textContent('#props');

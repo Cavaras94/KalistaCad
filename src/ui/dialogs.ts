@@ -7,6 +7,15 @@ import { SNAP_LABEL } from '../view/snap';
 import { COMMANDS } from './commands';
 import { VERSION_LONG } from './logo';
 import type { Box } from '../model/geom';
+import { boxValid } from '../model/geom';
+import type { Prim } from '../model/entities';
+import { primsBox, fmtNum as fmtDec } from '../model/entities';
+import type { FormSpec, FormValues, FormField } from '../tools/base';
+import { paint } from '../view/render';
+import { View } from '../view/view';
+
+/** Numero come lo si scrive: virgola per i decimali, senza zeri inutili. */
+const fmtNum = (x: number) => (Number.isInteger(x) ? String(x) : fmtDec(x, 4).replace(/0+$/, '').replace(/,$/, ''));
 import { buildSheet, PAPERS, STD_SCALES, Paper, PrintOpts, TitleFields, WallFill } from '../print/sheet';
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...kids: (Node | string)[]): HTMLElementTagNameMap[K] {
@@ -192,6 +201,136 @@ export function chooseDialog(title: string, items: { key: string; label: string;
   });
 }
 
+// ---------------------------------------------------------------- impostazioni dei comandi
+
+const DIALOGS_KEY = 'planimetrie.dialogs';
+
+/** Vero se i comandi aprono le finestre con le loro impostazioni: preferenza del browser, accesa di partenza. */
+export function dialogsOn(): boolean {
+  try { return localStorage.getItem(DIALOGS_KEY) !== '0'; } catch { return true; }
+}
+
+export function setDialogsOn(on: boolean) {
+  try { localStorage.setItem(DIALOGS_KEY, on ? '1' : '0'); } catch { /* archiviazione non disponibile */ }
+}
+
+/** Piccolo disegno di una voce (un retino, un blocco) adattato al riquadro. */
+function tileCanvas(ps: Prim[], w = 76, h = 56): HTMLCanvasElement {
+  const c = el('canvas', { width: String(w * 2), height: String(h * 2) });
+  c.style.width = `${w}px`; c.style.height = `${h}px`;
+  const g = c.getContext('2d');
+  const b = primsBox(ps);
+  if (!g || !boxValid(b)) return c;
+  g.scale(2, 2);
+  const view = new View();
+  view.w = w; view.h = h;
+  view.fit(b, 0.08);
+  paint(g, view, ps, { color: '#dfe4ec', lw: 1, dash: [], wallAlpha: 0.45, tint: false });
+  return c;
+}
+
+/**
+ * Finestra con le impostazioni di un comando: numeri, scelte a pulsanti, riquadri con il disegno.
+ * Restituisce i valori, o null se la si chiude senza OK. Invio vale OK; un doppio clic su un
+ * riquadro lo sceglie e conferma.
+ */
+export function formDialog(spec: FormSpec): Promise<FormValues | null> {
+  return new Promise(resolve => {
+    let done = false;
+    const body = el('div', { class: 'cmd-form' });
+    if (spec.note) body.append(el('p', { class: 'muted' }, spec.note));
+    const read: (() => [string, number | string | boolean] | null)[] = [];
+    let submit: () => void = () => {};
+    // voci che si vedono solo con una certa scelta: nascoste, non contano e tengono il valore proposto
+    const chosen: Record<string, string> = {};
+    const shown: { f: FormField; node: Element }[] = [];
+    const visible = (f: FormField) => !f.when || chosen[f.when[0]] === f.when[1];
+    const sync = () => { for (const { f, node } of shown) (node as HTMLElement).style.display = visible(f) ? '' : 'none'; };
+    for (const f of spec.fields) if (f.k === 'choice') chosen[f.key] = f.value;
+    for (const f of spec.fields) {
+      const before = body.childElementCount;
+      if (f.k === 'num') {
+        const i = el('input', { type: 'text', value: fmtNum(f.value), name: f.key, inputmode: 'decimal' });
+        const err = el('small', { class: 'err' });
+        body.append(el('label', { class: 'field' }, el('span', {}, f.label + (f.unit ? ` (${f.unit})` : '')), i, f.hint ? el('small', {}, f.hint) : '', err));
+        read.push(() => {
+          const n = parseFloat(i.value.trim().replace(',', '.'));
+          const min = f.min ?? 0;
+          const bad = !Number.isFinite(n) || (!f.free && (f.minIncl ? n < min : n <= min)) || (f.max !== undefined && n > f.max) || (!!f.int && !Number.isInteger(n));
+          const range = f.free ? '' : ` (${f.minIncl ? 'almeno' : 'più di'} ${fmtNum(min)}${f.max !== undefined ? `, al massimo ${fmtNum(f.max)}` : ''})`;
+          err.textContent = bad ? `${f.int ? 'Serve un numero intero' : 'Numero non valido'}${range}` : '';
+          i.classList.toggle('bad', bad);
+          return bad ? null : [f.key, n];
+        });
+      } else if (f.k === 'choice') {
+        let val = f.value;
+        const row = el('div', { class: 'seg', role: 'radiogroup' });
+        for (const [v, label] of f.options) {
+          const b = el('button', { type: 'button', class: v === val ? 'on' : '', 'data-value': v }, label);
+          b.onclick = () => { val = chosen[f.key] = v; row.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); b.blur(); sync(); }; // Invio resta OK
+          row.append(b);
+        }
+        body.append(el('div', { class: 'field' }, el('span', {}, f.label), row));
+        read.push(() => [f.key, val]);
+      } else if (f.k === 'tiles') {
+        let val = f.value;
+        const grid = el('div', { class: 'tiles', role: 'radiogroup' });
+        for (const t of f.tiles) {
+          const d = el('div', { class: 'tile' + (t.value === val ? ' on' : ''), role: 'radio', title: t.label, 'data-value': t.value }, tileCanvas(t.prims), el('span', {}, t.label));
+          d.onclick = () => { val = t.value; grid.querySelectorAll('.tile').forEach(x => x.classList.toggle('on', x === d)); };
+          d.ondblclick = () => { val = t.value; submit(); };
+          grid.append(d);
+        }
+        body.append(el('div', { class: 'field' }, el('span', {}, f.label), grid));
+        read.push(() => [f.key, val]);
+        setTimeout(() => grid.querySelector('.tile.on')?.scrollIntoView({ block: 'nearest' }), 0);
+      } else {
+        const c = el('input', { type: 'checkbox', name: f.key });
+        c.checked = f.value;
+        body.append(el('label', { class: 'check' }, c, ` ${f.label}`));
+        read.push(() => [f.key, c.checked]);
+      }
+      if (f.when) {
+        shown.push({ f, node: body.children[before] });
+        const r = read.pop()!;
+        read.push(() => (visible(f) ? r() : [f.key, f.value]));
+      }
+    }
+    sync();
+    const collect = (): FormValues | null => {
+      const out: FormValues = {};
+      let ok = true;
+      for (const r of read) { const kv = r(); if (kv) out[kv[0]] = kv[1]; else ok = false; }
+      return ok ? out : null;
+    };
+    const buttons: Btn[] = [];
+    if (spec.extra) buttons.push({ label: spec.extra, onClick: () => { done = true; resolve({ _extra: true }); } });
+    buttons.push({ label: 'Annulla', onClick: () => { done = true; resolve(null); } });
+    buttons.push({ label: 'OK', primary: true, onClick: () => { const v = collect(); if (!v) return false; done = true; resolve(v); } });
+    const m = modal(spec.title, body, buttons, spec.fields.some(f => f.k === 'tiles'));
+    submit = () => { const v = collect(); if (v) { done = true; resolve(v); m.close(); } };
+    const root = document.getElementById('dialog-root')!;
+    const obs = new MutationObserver(() => { if (!document.body.contains(body)) { obs.disconnect(); if (!done) resolve(null); } });
+    obs.observe(root, { childList: true });
+    // il primo numero è già selezionato: si scrive sopra il valore proposto
+    setTimeout(() => (body.querySelector('input[type=text]') as HTMLInputElement | null)?.select(), 0);
+  });
+}
+
+/** Domanda sì/no; il pulsante evidenziato (Invio) è la risposta def. null se la si chiude senza rispondere. */
+export function yesNoDialog(title: string, text: string, def: boolean): Promise<boolean | null> {
+  return new Promise(resolve => {
+    let done = false;
+    const body = el('p', {}, text);
+    modal(title, body, [
+      { label: 'No', primary: !def, onClick: () => { done = true; resolve(false); } },
+      { label: 'Sì', primary: def, onClick: () => { done = true; resolve(true); } },
+    ]);
+    const obs = new MutationObserver(() => { if (!document.body.contains(body)) { obs.disconnect(); if (!done) resolve(null); } });
+    obs.observe(document.getElementById('dialog-root')!, { childList: true });
+  });
+}
+
 /** Legge un file di immagine e lo riduce a una dimensione ragionevole per stare dentro il disegno. */
 export function readImageFile(file: File, maxSide = 1600): Promise<{ src: string; w: number; h: number } | null> {
   return new Promise(resolve => {
@@ -282,6 +421,12 @@ export function importUnitsDialog(name: string, declared: Units | null, size: { 
 export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Settings, convert: boolean) => void) {
   const s = { ...doc.settings };
   const body = el('div', { class: 'form-grid' });
+  // come si lavora: è la prima cosa, perché cambia come si comportano tutti i comandi
+  const mode = el('select', { name: 'cmd-mode' });
+  mode.append(el('option', { value: 'dialogs' }, 'Con le finestre: ogni comando apre le sue impostazioni'), el('option', { value: 'cmdline' }, 'Solo riga di comando, come in AutoCAD'));
+  mode.value = dialogsOn() ? 'dialogs' : 'cmdline';
+  body.append(el('label', { class: 'field span2' }, el('span', {}, 'Modo di lavorare'), mode,
+    el('small', {}, 'Con le finestre, MURO, TRATTEGGIO, INSERISCI, PORTA, TESTO, OFFSET, SERIE… chiedono spessori, retini, misure in una finestra, e le domande sì/no hanno i pulsanti. Con la riga di comando i valori si scrivono sotto, con le opzioni fra parentesi. Vale per questo browser, per tutti i disegni.')));
   const num = (label: string, key: keyof Settings, hint = '') => {
     const i = el('input', { type: 'text', value: String(s[key]).replace('.', ',') });
     i.onchange = () => {
@@ -290,7 +435,7 @@ export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Setting
     };
     body.append(el('label', { class: 'field' }, el('span', {}, label), i, hint ? el('small', {}, hint) : ''));
   };
-  const units = el('select');
+  const units = el('select', { name: 'units' });
   for (const u of ['mm', 'cm', 'm'] as Units[]) units.append(el('option', { value: u }, UNIT_LABEL[u]));
   units.value = s.units;
   body.append(el('label', { class: 'field' }, el('span', {}, 'Unità del disegno'), units, el('small', {}, 'L\'unità in cui si digitano e si leggono le misure.')));
@@ -337,6 +482,7 @@ export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Setting
     { label: 'Annulla' },
     {
       label: 'Salva', primary: true, onClick: () => {
+        setDialogsOn(mode.value === 'dialogs');
         snap.modes = new Set(kinds.filter(k => boxes.get(k)!.checked));
         snap.polarInc = parseFloat(polar.value);
         // valori che romperebbero il disegno: decimali fuori misura, spessori e altezze a zero

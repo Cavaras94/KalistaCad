@@ -1,7 +1,7 @@
 // Blocchi: gruppi di entità con un nome, definiti una volta e inseriti quante volte serve.
 import type { Ent, NewEnt, Blocks } from '../model/entities';
-import { transform, blockUses } from '../model/entities';
-import { Vec, translate } from '../model/geom';
+import { transform, blockUses, prims } from '../model/entities';
+import { Vec, v, translate } from '../model/geom';
 import { Tool, SelTool, O, parseNum, parseAngle, fmtLen } from './base';
 
 /** Nome del blocco come è scritto nel disegno, cercato senza badare a maiuscole e minuscole. */
@@ -50,7 +50,7 @@ export class BlockTool extends SelTool {
     }
     if (existing) {
       this.confirming = true;
-      this.ask(`Il blocco "${existing}" esiste già: ridefinirlo? Cambieranno tutti i suoi inserimenti`, [O('S', 'Sì'), O('N', 'No')], 'N', 'none');
+      this.askYesNo(`Il blocco "${existing}" esiste già: ridefinirlo? Cambieranno tutti i suoi inserimenti`, 'N');
     } else this.askBase();
     return true;
   }
@@ -123,7 +123,7 @@ export class BlockCloseTool extends Tool {
 
   start() {
     if (!this.h.doc.editing) { this.h.msg('Nessun blocco in modifica.'); this.h.done(); return; }
-    this.ask(`Salvare le modifiche al blocco "${this.h.doc.editing.name}"?`, [O('S', 'Sì'), O('N', 'No')], 'S', 'none');
+    this.askYesNo(`Salvare le modifiche al blocco "${this.h.doc.editing.name}"?`, 'S');
   }
 
   option(k: string) { this.close(k === 'S'); }
@@ -208,7 +208,24 @@ export class InsertTool extends Tool {
       return;
     }
     const def = names.includes(InsertTool.last) ? InsertTool.last : names.length === 1 ? names[0] : undefined;
-    this.ask('Nome del blocco da inserire', names.map(n => O(n, n)), def, 'text');
+    const ctx = this.h.doc.ctx();
+    this.withForm({
+      title: 'Inserisci blocco',
+      fields: [
+        {
+          k: 'tiles', key: 'name', label: 'Blocco', value: def ?? names[0],
+          tiles: names.map(n => ({ value: n, label: n, prims: prims({ id: 0, layer: '0', t: 'insert', name: n, p: v(0, 0), s: 1, rot: 0 }, ctx) })),
+        },
+        { k: 'num', key: 's', label: 'Scala', value: this.s },
+        { k: 'num', key: 'rot', label: 'Rotazione', unit: '°', value: Math.round(((this.rot * 180) / Math.PI) * 1000) / 1000, free: true },
+      ],
+    }, r => {
+      if (!r) { this.ask('Nome del blocco da inserire', names.map(n => O(n, n)), def, 'text'); return; }
+      this.blockName = InsertTool.last = r.name as string;
+      this.s = r.s as number;
+      this.rot = ((r.rot as number) * Math.PI) / 180;
+      this.askPoint();
+    });
   }
 
   private askPoint() {

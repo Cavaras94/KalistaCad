@@ -83,8 +83,27 @@ export class RotateTool extends SelTool {
     this.ask('Specificare angolo di rotazione o', [O('C', 'Copia'), O('R', 'Riferimento')], '0');
   }
 
+  static lastDeg = 90;
+
+  /** Dato il punto base: l'angolo nella finestra, oppure col mouse (pulsante "Col mouse", o finestre spente). */
+  private angleForm() {
+    this.withForm({
+      title: 'Ruota',
+      extra: 'Col mouse',
+      fields: [
+        { k: 'num', key: 'a', label: 'Angolo di rotazione (+ antiorario, - orario)', unit: '°', value: RotateTool.lastDeg, free: true },
+        { k: 'check', key: 'copy', label: 'Ruotare una copia (gli originali restano dove sono)', value: this.copy },
+      ],
+    }, v => {
+      if (!v || v._extra) { this.askAngle(); return; }
+      RotateTool.lastDeg = v.a as number;
+      this.copy = !!v.copy;
+      this.apply(((v.a as number) * Math.PI) / 180);
+    });
+  }
+
   point(p: Vec) {
-    if (!this.c) { this.c = p; this.base = p; this.askAngle(); return; }
+    if (!this.c) { this.c = p; this.base = p; this.angleForm(); return; }
     if (this.ref) {
       if (this.ref.step === 'a1') { this.ref = { step: 'a2', p1: p }; this.base = p; this.ask('Specificare secondo punto'); return; }
       if (this.ref.step === 'a2') { this.ref = { step: 'new', ang: angleOf(this.ref.p1!, p) }; this.base = this.c; this.ask('Specificare nuovo angolo'); return; }
@@ -148,7 +167,7 @@ export class MirrorTool extends SelTool {
     if (!this.p2) {
       if (dist(this.p1, p) < 1e-12) return;
       this.p2 = p; this.base = null;
-      this.ask('Cancellare le entità di origine?', [O('S', 'Sì'), O('N', 'No')], 'No', 'none');
+      this.askYesNo('Cancellare le entità di origine?', 'N');
     }
   }
 
@@ -183,8 +202,23 @@ export class ScaleTool extends SelTool {
 
   private askFactor() { this.numberAsText = true; this.ask('Specificare fattore di scala o', [O('R', 'Riferimento')]); }
 
+  static lastF = 2;
+
+  /** Dato il punto base: il fattore nella finestra, oppure col mouse (pulsante "Col mouse", o finestre spente). */
+  private factorForm() {
+    this.withForm({
+      title: 'Scala',
+      extra: 'Col mouse',
+      fields: [{ k: 'num', key: 'f', label: 'Fattore di scala (2 = doppio, 0,5 = metà)', value: ScaleTool.lastF }],
+    }, v => {
+      if (!v || v._extra) { this.askFactor(); return; }
+      ScaleTool.lastF = v.f as number;
+      this.apply(v.f as number);
+    });
+  }
+
   point(p: Vec) {
-    if (!this.c) { this.c = p; this.base = p; this.askFactor(); return; }
+    if (!this.c) { this.c = p; this.base = p; this.factorForm(); return; }
     if (this.refStep === 1) { this.refP1 = p; this.base = p; this.refStep = 2; this.ask('Specificare secondo punto'); return; }
     if (this.refStep === 2) { this.refLen = dist(this.refP1!, p); this.refStep = 3; this.base = this.c; this.ask('Specificare nuova lunghezza'); return; }
     const d = dist(this.c, p);
@@ -231,9 +265,24 @@ export class OffsetTool extends Tool {
   private target: Ent | null = null;
 
   start() {
-    this.d = this.h.doc.settings.offsetD;
-    this.numberAsText = true;
-    this.ask('Specificare distanza di offset o', [O('P', 'Punto (passante)')], fmtLen(this.d));
+    const s = this.h.doc.settings;
+    this.d = s.offsetD;
+    this.withForm({
+      title: 'Offset',
+      fields: [
+        { k: 'num', key: 'd', label: 'Distanza', unit: s.units, value: this.d },
+        { k: 'check', key: 'through', label: 'Passante per un punto (la distanza la dà il punto che si clicca)', value: this.through },
+      ],
+    }, v => {
+      if (!v) {
+        this.numberAsText = true;
+        this.ask('Specificare distanza di offset o', [O('P', 'Punto (passante)')], fmtLen(this.d));
+        return;
+      }
+      this.d = s.offsetD = v.d as number;
+      this.through = !!v.through;
+      this.askEnt();
+    });
   }
 
   text(s: string): boolean {
@@ -441,7 +490,20 @@ export class FilletTool extends Tool {
   /** opzione Polilinea: raccorda tutti gli spigoli della polilinea indicata */
   private whole = false;
 
-  start() { this.askFirst(); }
+  start() {
+    const s = this.h.doc.settings;
+    this.withForm({
+      title: 'Raccorda',
+      fields: [
+        { k: 'num', key: 'r', label: 'Raggio (0 = spigolo vivo)', unit: s.units, value: s.filletR, minIncl: true },
+        { k: 'check', key: 'whole', label: 'Tutti gli spigoli di una polilinea', value: false },
+      ],
+    }, v => {
+      if (v) s.filletR = v.r as number;
+      this.askFirst();
+      if (v?.whole) this.option('P');
+    });
+  }
 
   private askFirst() {
     this.first = null;
@@ -522,7 +584,19 @@ export class ChamferTool extends Tool {
   private asking: 'd1' | 'd2' | null = null;
   private def2 = 0;
 
-  start() { this.askFirst(); }
+  start() {
+    const s = this.h.doc.settings;
+    this.withForm({
+      title: 'Smusso',
+      fields: [
+        { k: 'num', key: 'd1', label: 'Distanza sul primo lato', unit: s.units, value: s.chamferD1, minIncl: true },
+        { k: 'num', key: 'd2', label: 'Distanza sul secondo lato', unit: s.units, value: s.chamferD2, minIncl: true },
+      ],
+    }, v => {
+      if (v) { s.chamferD1 = v.d1 as number; s.chamferD2 = v.d2 as number; }
+      this.askFirst();
+    });
+  }
 
   private askFirst() {
     this.first = null;
@@ -603,9 +677,36 @@ export class ArrayTool extends SelTool {
   private n = 0;
   private fill = TAU;
 
+  /** serie polare con i valori della finestra: manca solo il centro */
+  private polarForm: { n: number; fill: number; rot: boolean } | null = null;
+
   afterSelect() {
-    this.step = 'type';
-    this.ask('Tipo di serie', [O('R', 'Rettangolare'), O('P', 'Polare')], 'R', 'none');
+    const u = this.h.doc.settings.units;
+    this.withForm({
+      title: 'Serie',
+      fields: [
+        { k: 'choice', key: 'type', label: 'Tipo', value: 'R', options: [['R', 'Rettangolare (righe e colonne)'], ['P', 'Polare (attorno a un centro, da indicare dopo)']] },
+        { k: 'num', key: 'rows', label: 'Numero di righe (---)', value: 1, min: 1, minIncl: true, int: true, when: ['type', 'R'] },
+        { k: 'num', key: 'cols', label: 'Numero di colonne (|||)', value: 1, min: 1, minIncl: true, int: true, when: ['type', 'R'] },
+        { k: 'num', key: 'dy', label: 'Distanza fra le righe (negativa = verso il basso)', unit: u, value: 0, free: true, when: ['type', 'R'] },
+        { k: 'num', key: 'dx', label: 'Distanza fra le colonne (negativa = verso sinistra)', unit: u, value: 0, free: true, when: ['type', 'R'] },
+        { k: 'num', key: 'n', label: 'Numero di elementi (originale compreso)', value: 6, min: 2, minIncl: true, int: true, when: ['type', 'P'] },
+        { k: 'num', key: 'fill', label: 'Angolo da riempire (+ antiorario, - orario)', unit: '°', value: 360, min: -360, minIncl: true, max: 360, when: ['type', 'P'] },
+        { k: 'check', key: 'rot', label: 'Ruotare gli elementi copiati', value: true, when: ['type', 'P'] },
+      ],
+    }, v => {
+      if (!v) { this.step = 'type'; this.ask('Tipo di serie', [O('R', 'Rettangolare'), O('P', 'Polare')], 'R', 'none'); return; }
+      if (v.type === 'R') {
+        this.rows = v.rows as number; this.cols = v.cols as number; this.dy = v.dy as number;
+        if (this.rows === 1 && this.cols === 1) { this.h.msg('Una riga e una colonna: niente da copiare.'); this.finish(); return; }
+        this.rect(v.dx as number);
+        return;
+      }
+      if (Math.abs(v.fill as number) < 1e-9) { this.h.msg('L\'angolo da riempire non può essere zero.'); this.finish(); return; }
+      this.polarForm = { n: v.n as number, fill: ((v.fill as number) * Math.PI) / 180, rot: !!v.rot };
+      this.step = 'center';
+      this.ask('Specificare il centro della serie');
+    });
   }
 
   private num(step: ArrayTool['step'], prompt: string, def?: string) {
@@ -623,6 +724,8 @@ export class ArrayTool extends SelTool {
   point(p: Vec) {
     if (this.step !== 'center') return;
     this.c = p;
+    const f = this.polarForm;
+    if (f) { this.n = f.n; this.fill = f.fill; this.polar(f.rot); return; }
     this.num('count', 'Numero di elementi (originale compreso)');
   }
 
@@ -668,7 +771,7 @@ export class ArrayTool extends SelTool {
 
   private askRot() {
     this.step = 'rot';
-    this.ask('Ruotare gli elementi copiati?', [O('S', 'Sì'), O('N', 'No')], 'S', 'none');
+    this.askYesNo('Ruotare gli elementi copiati?', 'S');
   }
 
   private afterCounts() {
@@ -810,7 +913,7 @@ export class MatchPropTool extends Tool {
       { key: 'lt', label: 'Tipo di linea', on: w.lt },
       { key: 'lw', label: 'Spessore', on: w.lw },
       { key: 'text', label: 'Altezza del testo (testi, quote, direttrici)', on: w.text },
-      { key: 'special', label: 'Proprietà dello stesso tipo: spessore dei muri, retino dei tratteggi', on: w.special },
+      { key: 'special', label: 'Proprietà dello stesso tipo: spessore e riempimento dei muri, retino dei tratteggi', on: w.special },
     ]).then(r => { if (r) Object.assign(w, r); });
   }
 
@@ -824,7 +927,11 @@ export class MatchPropTool extends Tool {
     if (w.lt) { if (s.lt) upd.lt = s.lt; else delete upd.lt; }
     if (w.lw) { if (s.lw !== undefined) upd.lw = s.lw; else delete upd.lw; }
     if (w.special) {
-      if (upd.t === 'wall' && s.t === 'wall') upd.th = s.th;
+      if (upd.t === 'wall' && s.t === 'wall') {
+        upd.th = s.th;
+        if (s.pat) upd.pat = s.pat; else delete upd.pat;
+        if (s.pat && s.sp !== undefined) upd.sp = s.sp; else delete upd.sp;
+      }
       if (upd.t === 'hatch' && s.t === 'hatch') { upd.pat = s.pat; upd.sp = s.sp; upd.ang = s.ang; }
     }
     if (w.text) {

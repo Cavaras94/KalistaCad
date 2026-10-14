@@ -7,7 +7,7 @@ import { Vec, Box, v, dist, boxOf, sub, angleOf, len, emptyBox, boxUnion, boxVal
 import { View } from '../view/view';
 import { renderDoc, paint, entPrims, layerDash, whenImagesLoad } from '../view/render';
 import { findSnap, pickAt, pickBox, SnapResult, SnapSettings, SNAP_LABEL } from '../view/snap';
-import type { Host, Tool } from '../tools/base';
+import type { Host, Tool, FormSpec } from '../tools/base';
 import { parsePoint, fmtLen } from '../tools/base';
 import { GripTool } from '../tools/misc';
 import { purgeBlocks } from '../tools/blocks';
@@ -16,7 +16,7 @@ import { findCommand, suggest, COMMANDS } from './commands';
 import { icon } from './icons';
 import { logo, VERSION, VERSION_LONG } from './logo';
 import { Panels } from './panels';
-import { settingsDialog, helpDialog, printDialog, confirmBox, askText, importUnitsDialog, chooseDialog, pickImageFile, writeBox } from './dialogs';
+import { settingsDialog, helpDialog, printDialog, confirmBox, askText, importUnitsDialog, chooseDialog, pickImageFile, writeBox, formDialog, yesNoDialog, dialogsOn } from './dialogs';
 import { exportDxf } from '../io/dxf-export';
 import { importDxf, importDwg } from '../io/files';
 import type { ImportResult } from '../io/importer';
@@ -144,6 +144,10 @@ export class App implements Host {
   tol() { return PICK_PX / this.view.s; }
 
   choose(title: string, items: { key: string; label: string; on: boolean }[]) { return chooseDialog(title, items); }
+  get dialogs() { return dialogsOn(); }
+  form(spec: FormSpec) { return formDialog(spec); }
+  confirm(title: string, text: string, def: boolean) { return yesNoDialog(title, text, def); }
+  isCurrent(t: Tool) { return this.tool === t || this.suspended?.tool === t; }
   pickImage() { return pickImageFile(); }
   write(o: { title: string; value?: string; at?: Vec; onInput?: (s: string) => void }) {
     let at: { x: number; y: number } | undefined;
@@ -394,15 +398,23 @@ export class App implements Host {
       g.save();
       for (const e of this.doc.ents) {
         if (!this.selection.has(e.id)) continue;
-        for (const q of grips(e)) {
+        grips(e, this.doc.ctx()).forEach((q, i) => {
           const s = this.view.toScreen(q);
           const hot = this.hotGrip && same(q, this.hotGrip, 1e-9);
           g.fillStyle = hot ? '#ff9800' : '#2f7cf6';
           g.strokeStyle = '#e8f0ff';
           g.lineWidth = 1;
-          g.fillRect(s.x - 4, s.y - 4, 8, 8);
-          g.strokeRect(s.x - 4.5, s.y - 4.5, 9, 9);
-        }
+          // il punto base di un blocco è più grande e ha una crocetta: è da lì che lo si prende per spostarlo
+          const r = e.t === 'insert' && i === 0 ? 6 : 4;
+          g.fillRect(s.x - r, s.y - r, 2 * r, 2 * r);
+          g.strokeRect(s.x - r - 0.5, s.y - r - 0.5, 2 * r + 1, 2 * r + 1);
+          if (r > 4) {
+            const cx = Math.round(s.x) + 0.5, cy = Math.round(s.y) + 0.5;
+            g.beginPath();
+            g.moveTo(cx - 11, cy); g.lineTo(cx + 11, cy); g.moveTo(cx, cy - 11); g.lineTo(cx, cy + 11);
+            g.stroke();
+          }
+        });
       }
       g.restore();
     }
@@ -550,7 +562,7 @@ export class App implements Host {
       const tolPx = 6;
       for (const e of this.doc.ents) {
         if (!this.selection.has(e.id)) continue;
-        for (const q of grips(e)) {
+        for (const q of grips(e, this.doc.ctx())) {
           const s = this.view.toScreen(q);
           if (Math.abs(s.x - this.mouse.x) <= tolPx && Math.abs(s.y - this.mouse.y) <= tolPx) { this.hotGrip = q; break; }
         }
@@ -1116,7 +1128,9 @@ export class App implements Host {
     const r = anchor.getBoundingClientRect(), p = pop.getBoundingClientRect();
     pop.style.left = `${Math.max(4, Math.min(r.left, window.innerWidth - p.width - 4))}px`;
     pop.style.top = `${Math.max(4, r.top - p.height - 4)}px`;
-    setTimeout(() => { document.addEventListener('mousedown', out, true); document.addEventListener('keydown', key, true); }, 0);
+    // i tasti valgono da subito; il clic fuori solo dal prossimo, perché quello che ha aperto il menu è ancora in corso
+    document.addEventListener('keydown', key, true);
+    setTimeout(() => document.addEventListener('mousedown', out, true), 0);
   }
 
   private toggle(what: 'osnap' | 'grid' | 'ortho' | 'snap' | 'polar' | 'lwt' | 'otrack') {

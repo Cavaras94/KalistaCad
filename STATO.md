@@ -8,7 +8,7 @@ Web app (TypeScript + Vite), gira nel browser.
 ```
 npm install
 npm run dev        # apre su http://localhost:5173
-npm test           # test unitari (157)
+npm test           # test unitari (168)
 npm run e2e        # collaudo in Chrome: digita i comandi come un utente
 npm run chiavetta  # prepara la versione da chiavetta in chiavetta/Kalista
 npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e in Edge
@@ -20,9 +20,12 @@ npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e i
   centro), SPLINE (per punti, aperta o chiusa), TESTO, TRATTEGGIO (clic interno).
 - Blocchi: BLOCCO crea un blocco dalla selezione, INSERISCI lo mette dove serve con scala e rotazione,
   ESPLODI lo riapre. Si salvano nel file, si specchiano, possono contenere altri blocchi.
-- Planimetria: MURO (spessore, giustificazione, angoli giuntati, innesti a T), PORTA, FINESTRA
-  (aprono il muro, distanza dallo spigolo), LOCALE (clic dentro la stanza → superficie in m²).
+  Selezionato, un blocco mostra il punto base (grip grande con la crocetta) da cui lo si sposta.
+- Planimetria: MURO (spessore, giustificazione, riempimento con un retino, angoli giuntati, innesti
+  a T), PORTA, FINESTRA (aprono il muro, distanza dallo spigolo), LOCALE (clic dentro la stanza →
+  superficie in m²).
 - Quote: lineare, allineata, continua, raggio, diametro, angolare (fra due linee o su un arco).
+  Di un muro si quotano i fili, da spigolo a spigolo, non l'asse.
   Altezza del testo: per tutte in Impostazioni, per la singola quota nel pannello Proprietà; il
   pennello (COPIA PROPRIETÀ, MA) la copia da una quota alle altre insieme a layer e colore.
 - Unità: cambiandole in Impostazioni il disegno si converte e le misure reali restano le stesse
@@ -41,7 +44,7 @@ npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e i
 - Stampa: A4–A0, scala 1:1…1:5000 o adatta, cartiglio, spessori in mm, PDF dal browser.
   Verificata la scala esatta (500 cm a 1:100 = 50 mm) e il formato del PDF.
 
-Collaudo nel browser: 172 controlli su 172 passano. Versione da chiavetta: 10 su 10 (Chrome ed Edge).
+Collaudo nel browser: 210 controlli su 210 passano. Versione da chiavetta: 12 su 12 (Chrome ed Edge).
 
 ## Versioni
 
@@ -49,6 +52,15 @@ La versione è quella di `package.json` e compare in alto a sinistra accanto al 
 si legge anche la data), nella prima riga della riga di comando, in F1 e nel LEGGIMI della chiavetta.
 Prima di distribuire una copia nuova: aumentare la versione in `package.json`, poi `crea-chiavetta.bat`.
 
+- 0.4.5 (14 ottobre 2026): finestre di dialogo per i comandi (vedi "Versione 0.4.5" più sotto);
+  MURO, tornando con un clic sul punto di partenza la stanza si chiude e l'ultimo angolo viene
+  giuntato come gli altri (con le misure interne restava aperto); corretti i difetti trovati con una
+  revisione delle 0.4.3–0.4.4.
+- 0.4.4 (13 ottobre 2026): i muri si disegnano con le misure interne (prima sull'asse: una stanza
+  disegnata 300 misurava 290 dentro) e la quota di un muro selezionato prende il filo dal lato in cui
+  la si mette (vedi "Versioni 0.4.3 e 0.4.4" più sotto).
+- 0.4.3 (13 ottobre 2026): tre richieste di chi lo usa (vedi "Versioni 0.4.3 e 0.4.4" più sotto): punto per
+  spostare i blocchi, quote dei muri dai fili e non dall'asse, retini nuovi e muri con il retino.
 - 0.4.2 (13 ottobre 2026): i muri dentro un blocco restano giuntati agli angoli e porte e finestre
   continuano ad aprirli (prima, creato il blocco, ogni muro tornava un rettangolo a sé).
 - 0.4.1 (13 ottobre 2026): stampa di una finestra corretta (si stampa solo la finestra, adattata al
@@ -74,6 +86,81 @@ Prima di distribuire una copia nuova: aumentare la versione in `package.json`, p
 - `crea-chiavetta.bat`: prepara `chiavetta/Kalista`, la cartella da copiare sulla chiavetta. Sui PC dei
   ragazzi basta un doppio clic su `Kalista.html`: niente installazione, niente rete. La cartella va
   rigenerata dopo ogni modifica al programma.
+
+## Versione 0.4.5: finestre dei comandi
+
+Richiesta di chi lo usa: le impostazioni dei comandi in finestre, non solo nella riga di comando.
+
+- All'avvio si apre una finestra con i valori già compilati (gli ultimi usati); Invio = OK, Esc
+  annulla il comando. Poi si disegna col mouse come prima.
+  - MURO: spessore, su cosa cadono le misure, riempimento (riquadri con i retini disegnati).
+  - TRATTEGGIO: retino (riquadri; doppio clic = sceglie e conferma), passo, angolo. L'opzione
+    Pattern della riga di comando riapre la finestra.
+  - INSERISCI: i blocchi del disegno come miniature, scala, rotazione.
+  - PORTA e FINESTRA: larghezza del vano (una volta, all'avvio). TESTO: altezza, rotazione,
+    allineamento; poi si clicca il punto e si scrive.
+  - OFFSET (distanza o passante), RACCORDA (raggio, tutta la polilinea), SMUSSO (due distanze),
+    SERIE (rettangolare o polare: la finestra mostra solo i campi del tipo scelto; per la polare si
+    clicca poi il centro).
+  - RUOTA e SCALA: dato il punto base, angolo o fattore nella finestra, con il pulsante "Col mouse"
+    per farlo trascinando come prima.
+- Le domande sì/no (ridefinire un blocco, salvare la modifica di un blocco, cancellare gli originali
+  dello specchio, ruotare le copie della serie, eliminare un layer pieno) hanno una finestra con i
+  pulsanti Sì e No. Chiudendola senza rispondere la domanda resta nella riga di comando.
+- Ognuno sceglie come lavorare: prima voce delle Impostazioni, "Modo di lavorare": con le finestre
+  (di partenza) o solo con la riga di comando, come in AutoCAD. È una preferenza del browser
+  (`planimetrie.dialogs`), non del disegno.
+  Le opzioni nella riga di comando funzionano anche con le finestre accese.
+- Il collaudo (`npm run e2e`) le spegne all'inizio, perché dà i valori digitando, e le prova
+  accese in una parte a sé; quello della chiavetta le prova accese.
+- Codice: `withForm` e `askYesNo` in `src/tools/base.ts`, finestra generica `formDialog` in
+  `src/ui/dialogs.ts` (numeri, scelte a pulsanti, riquadri con disegno, caselle; voci che si vedono
+  solo con una certa scelta).
+
+Revisione delle 0.4.3–0.4.4 (un revisore separato, ogni difetto riprodotto con un test). Corretti:
+
+- OFFSET, TAGLIA nel mezzo e SPEZZA toglievano il retino ai muri che ne nascevano.
+- MURO con le misure interne: i muri già fissati cambiavano lato muovendo il mouse, e premendo Invio
+  si poteva ottenere un muro diverso dall'anteprima. Ora il lato lo decidono i punti già dati.
+- Un percorso che tornava indietro su se stesso dava muri in diagonale: ora ogni tratto si sposta per
+  conto suo e gli angoli si fanno dove i tratti si tagliano. Il cursore sull'ultimo punto non fa più
+  sparire l'anteprima.
+- Un muro di un tratto solo con le misure interne nasceva spostato di mezzo spessore: ora, se il
+  percorso non gira, sta sull'asse.
+- Muro con riempimento Pieno: un contorno in più nel DXF ed esplodendolo.
+- In stampa le righe del retino dei muri prendevano lo spessore di linea del muro: ora sono sottili.
+
+Restano (segnalati dalla revisione, non corretti):
+
+- Esplodendo un muro con un retino il retino sparisce (restano i bordi).
+- Il retino è ancorato all'origine del disegno: spostando un muro o un blocco, il disegno del retino
+  scorre dentro il muro invece di muoversi con lui.
+
+## Versioni 0.4.3 e 0.4.4: cosa c'è di nuovo
+
+- **Blocchi, punto per spostarli**: il grip sul punto base ora è più grande e ha una crocetta. Se il
+  punto base cade fuori dal disegno del blocco (blocchi importati da DWG/DXF, o creati dando un punto
+  base lontano) compare un secondo grip al centro dell'ingombro: tutti e due spostano il blocco.
+- **Muri con le misure interne** (0.4.4): MURO ora parte con "misure interne": i punti che si danno sono gli
+  spigoli interni della stanza e lo spessore va verso l'esterno, in qualunque verso la si disegni
+  (lo decide il verso in cui gira il percorso; un tratto solo vale come filo sinistro). Una stanza
+  disegnata 300 × 200 misura 300 × 200 dentro. Prima le misure cadevano sull'asse e la stanza veniva
+  più stretta di uno spessore. Opzione Giustificazione: Interne, Esterne, Centro (asse), Sinistra, Destra.
+- **Quote dei muri**: QUOTA, Invio, clic su un muro misura il filo, da spigolo a spigolo, non più
+  l'asse: l'interno o l'esterno secondo il lato in cui si mette la linea di quota (l'anteprima cambia
+  passando da una parte all'altra). Quotando per punti, dove due muri fanno angolo lo snap preferisce
+  gli spigoli che si vedono alla fine dell'asse, che lì è nascosta dentro lo spessore (l'asse si
+  aggancia ancora andandoci sopra).
+- **Retini**: in più doppie linee a 45° (muratura), listoni sfalsati, spina di pesce (con angolo 45°
+  viene dritta), zig-zag (isolante), calcestruzzo. Le famiglie di righe ora si descrivono come nei
+  file .pat dei CAD (`HATCH_FAMS` in `src/model/entities.ts`): aggiungerne uno è una riga.
+- **Muri con il retino** (per esempio il muretto tecnico): MURO, opzione Riempimento, oppure
+  "Riempimento" e "Passo retino" nel pannello Proprietà di un muro già fatto; il pennello (MA) li
+  copia. Il muro si disegna e si stampa a righe al posto del riempimento pieno; passo predefinito un
+  terzo dello spessore. Le righe sono solo disegno: non fanno da snap né da bordi di taglio, e nel DXF
+  escono come linee.
+- Menu della barra di stato (snap, griglia): Invio ed Esc valgono da subito; prima, per un istante
+  dopo l'apertura, non venivano sentiti (il collaudo ci inciampava).
 
 ## Versione 0.4.0: cosa c'è di nuovo
 
@@ -149,7 +236,11 @@ Difetti noti:
 
 Funzioni che mancano ancora:
 
-1. Blocchi con attributi; libreria di blocchi pronti (sanitari, arredi) da cui pescare.
+0. Muri con le misure interne o esterne aggiunti in un secondo comando: per giuntarsi ai muri che
+   ci sono già l'asse nuovo deve finire sull'asse di quelli, cosa che succede da sola solo con
+   Giustificazione Centro. Servirebbe che MURO riconoscesse lo spigolo di un muro esistente.
+1. Blocchi con attributi; libreria di blocchi pronti (sanitari, arredi) da cui pescare; un comando
+   per cambiare il punto base di un blocco già fatto.
 2. Stile delle quote più ricco (testo sopra o in linea, unità, tolleranze); quota ordinata.
 3. Tratteggi associativi (che seguono il contorno quando lo si modifica).
 4. Spessore di linea visibile per entità nel DXF; export DXF con blocchi e quote veri.
@@ -211,7 +302,10 @@ difetto riprodotto con uno script prima di correggerlo. Corretti:
 
 - Altezze predefinite: testi 20 cm, quote 15 cm (2 e 1,5 mm su carta a 1:100). Vale per i disegni
   nuovi; quelli già salvati tengono le loro impostazioni.
-- Il collaudo si ferma con un errore se un clic cade fuori dall'area di disegno.
+- Il collaudo si ferma con un errore se un clic cade fuori dall'area di disegno. Disegna i muri
+  sull'asse (lo imposta all'inizio), perché le sue coordinate sono scritte così.
+- Il controllo "modifica del testo: riga aggiunta sotto" del collaudo una volta non è passato
+  e alla ripetizione sì: sembra una questione di tempi del riquadro di testo, da guardare.
 - Versione da chiavetta: una pagina aperta da disco non può caricare moduli né scaricare file, quindi
   tutto il programma sta dentro `Kalista.html` e il lettore DWG in `kalista-dwg.js`, caricato solo
   quando si apre un DWG. I due file devono restare nella stessa cartella.

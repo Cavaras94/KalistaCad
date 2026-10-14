@@ -107,7 +107,9 @@ export function buildSheet(doc: Doc, o: PrintOpts): Sheet {
     const lw = o.lineweights ? Math.max(0.05, e.lw ?? l.lw) : 0.18;
     const dash = LT_PATTERNS[e.lt ?? l.lt].map(x => x * doc.settings.ltScale);
     const strokeAttr = `stroke="${color}" stroke-width="${f(lw)}"${dash.length ? ` stroke-dasharray="${dash.map(f).join(' ')}"` : ''}`;
-    for (const p of entPrims(e, ctx)) out.push(primSvg(p, X, Y, k, color, strokeAttr, wallFill));
+    // le righe del retino di un muro vanno sottili e continue, qualunque sia il tratto del muro
+    const decoAttr = `stroke="${color}" stroke-width="${f(Math.min(lw, 0.13))}"`;
+    for (const p of entPrims(e, ctx)) out.push(primSvg(p, X, Y, k, color, p.k === 'pl' && p.deco ? decoAttr : strokeAttr, wallFill));
   }
 
   const tb = o.title ? titleBlock(W, H, o.fields, o.logo) : '';
@@ -128,7 +130,7 @@ function primSvg(p: Prim, X: (x: number) => number, Y: (y: number) => number, k:
     case 'pl': {
       if (p.pts.length < 2) return '';
       const d = p.pts.map((q, i) => `${i ? 'L' : 'M'}${f(X(q.x))} ${f(Y(q.y))}`).join('') + (p.closed ? 'Z' : '');
-      if (p.fill === 'tint') return '';
+      if (p.fill === 'tint' || p.fill === 'hit') return '';
       if (p.fill) {
         const fill = p.fill === 'wall' ? wallFill : color;
         if (fill === 'none') return p.stroke === false ? '' : `<path d="${d}" ${stroke}/>`;

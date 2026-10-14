@@ -1,29 +1,49 @@
 // Comandi da planimetria: muri, porte, finestre, locali, quote.
-import type { Ent, NewEnt, WallE, DimE } from '../model/entities';
-import { polyPoints, dimGeometry, editCurves } from '../model/entities';
-import { offsetPolyPts } from '../model/ops';
+import type { Ent, NewEnt, WallE, DimE, HatchPattern } from '../model/entities';
+import { polyPoints, dimGeometry, editCurves, HATCH_NAMES } from '../model/entities';
+import { PAT_OPTS, patternTiles } from './draw';
 import { findRegion } from '../model/region';
-import { Vec, Curve, Seg, add, sub, mul, dot, dist, norm, perp, angleOf, same, closestOnSeg, distToCurve, lineLine, arcStart, arcEnd } from '../model/geom';
+import { Vec, Curve, Seg, add, sub, mul, dot, dist, norm, perp, angleOf, same, closestOnSeg, distToCurve, lineLine, arcStart, arcEnd, polygonArea } from '../model/geom';
 import { Tool, O, parseNum, fmtLen } from './base';
 import type { Host } from './base';
 
 // ---------------------------------------------------------------- MURO
 
-type Just = 'C' | 'S' | 'D';
-const JUST_NAME: Record<Just, string> = { C: 'centro', S: 'filo sinistro', D: 'filo destro' };
+/**
+ * Su cosa cadono i punti che si danno: I = filo interno (lo spessore va verso l'esterno della stanza
+ * che si sta disegnando), E = filo esterno, C = asse, S e D = filo a sinistra o a destra del verso
+ * in cui si disegna.
+ */
+type Just = 'I' | 'E' | 'C' | 'S' | 'D';
+const JUST_NAME: Record<Just, string> = { I: 'misure interne', E: 'misure esterne', C: 'misure sull\'asse', S: 'misure sul filo sinistro', D: 'misure sul filo destro' };
 
 export class WallTool extends Tool {
   readonly name = 'MURO';
-  static just: Just = 'C';
+  static just: Just = 'I';
+  /** retino con cui nascono i muri; vuoto = riempimento normale */
+  static pat: HatchPattern | '' = '';
   private pts: Vec[] = [];
-  private sub: '' | 'th' | 'just' = '';
+  private sub: '' | 'th' | 'just' | 'fill' = '';
 
-  start() { this.prompt(); }
+  start() {
+    const s = this.h.doc.settings;
+    this.withForm({
+      title: 'Muro',
+      fields: [
+        { k: 'num', key: 'th', label: 'Spessore', unit: s.units, value: s.wallTh },
+        { k: 'choice', key: 'just', label: 'Le misure che si danno sono', value: WallTool.just, options: [['I', 'Interne alla stanza'], ['E', 'Esterne'], ['C', 'Sull\'asse'], ['S', 'Filo sinistro'], ['D', 'Filo destro']] },
+        { k: 'tiles', key: 'pat', label: 'Riempimento (per esempio un retino per il muretto tecnico)', value: WallTool.pat, tiles: patternTiles(true) },
+      ],
+    }, v => {
+      if (v) { s.wallTh = v.th as number; WallTool.just = v.just as Just; WallTool.pat = v.pat as HatchPattern | ''; }
+      this.prompt();
+    });
+  }
 
   private prompt() {
     const s = this.h.doc.settings;
-    const info = `(spessore ${fmtLen(s.wallTh)}, ${JUST_NAME[WallTool.just]})`;
-    const opts = [O('S', 'Spessore'), O('G', 'Giustificazione')];
+    const info = `(spessore ${fmtLen(s.wallTh)}, ${JUST_NAME[WallTool.just]}${WallTool.pat ? `, ${HATCH_NAMES[WallTool.pat]}` : ''})`;
+    const opts = [O('S', 'Spessore'), O('G', 'Giustificazione'), O('R', 'Riempimento')];
     if (!this.pts.length) { this.ask(`Specificare punto iniziale ${info} o`, opts); return; }
     if (this.pts.length >= 3) opts.push(O('C', 'Chiudi'));
     opts.push(O('A', 'Annulla'));
@@ -32,9 +52,15 @@ export class WallTool extends Tool {
 
   option(k: string) {
     if (this.sub === 'just') { WallTool.just = k as Just; this.sub = ''; this.prompt(); return; }
+    if (this.sub === 'fill') {
+      WallTool.pat = k === 'N' ? '' : PAT_OPTS.find(o => o[0] === k)?.[2] ?? WallTool.pat;
+      this.sub = ''; this.prompt();
+      return;
+    }
     // richiesta solo numerica: un clic qui non deve aggiungere un vertice
     if (k === 'S') { this.sub = 'th'; this.ask('Spessore del muro', [], fmtLen(this.h.doc.settings.wallTh), 'none'); }
-    else if (k === 'G') { this.sub = 'just'; this.ask('Giustificazione', [O('C', 'Centro'), O('S', 'Sinistra'), O('D', 'Destra')], undefined, 'none'); }
+    else if (k === 'G') { this.sub = 'just'; this.ask('Le misure che si danno sono quelle', [O('I', 'Interne alla stanza'), O('E', 'Esterne'), O('C', 'Centro (asse del muro)'), O('S', 'Sinistra (filo)'), O('D', 'Destra (filo)')], undefined, 'none'); }
+    else if (k === 'R') { this.sub = 'fill'; this.ask('Riempimento del muro', [O('N', 'Normale'), ...PAT_OPTS.map(o => O(o[0], o[1]))], undefined, 'none'); }
     else if (k === 'C') this.commit(true);
     else if (k === 'A') {
       this.pts.pop();
@@ -55,23 +81,53 @@ export class WallTool extends Tool {
 
   point(p: Vec) {
     if (this.pts.length && same(this.pts[this.pts.length - 1], p, 1e-12)) return;
+    // un clic sul punto di partenza chiude la stanza, come l'opzione Chiudi
+    if (this.pts.length >= 3 && same(this.pts[0], p, 1e-9)) { this.commit(true); return; }
     this.pts.push(p);
     this.base = p;
     this.prompt();
   }
 
-  private walls(pts: Vec[], closed: boolean): NewEnt[] {
+  /**
+   * Muri lungo il percorso. ref = i punti da cui si decide da che parte va lo spessore con le misure
+   * interne o esterne: nell'anteprima sono quelli già dati, non il cursore, così i muri fissati non
+   * cambiano lato muovendo il mouse e quello che si vede è quello che si ottiene.
+   */
+  private walls(pts0: Vec[], closed: boolean, ref: Vec[] = pts0): NewEnt[] {
+    // via i punti ripetuti (il cursore sull'ultimo punto): un tratto lungo zero non ha direzione
+    let pts = pts0.filter((q, i) => i === 0 || !same(q, pts0[i - 1], 1e-9));
+    // tornando sul primo punto il giro è chiuso: l'ultimo muro va giuntato al primo come gli altri angoli
+    if (!closed && pts.length >= 4 && same(pts[0], pts[pts.length - 1], 1e-9)) { pts = pts.slice(0, -1); closed = true; }
+    if (closed && pts.length < 3) closed = false;
     if (pts.length < 2) return [];
     const th = this.h.doc.settings.wallTh;
-    const off = WallTool.just === 'C' ? 0 : WallTool.just === 'S' ? -th / 2 : th / 2;
-    const axis = off === 0 ? pts : offsetPolyPts(pts, closed, off);
-    if (!axis) return [];
-    const out: NewEnt[] = [];
-    const n = axis.length;
-    for (let i = 0; i < (closed ? n : n - 1); i++) {
-      out.push({ t: 'wall', a: axis[i], b: axis[(i + 1) % n], th, layer: 'MURI' });
+    // da che parte del percorso sta l'asse: +1 a sinistra, −1 a destra. Per le misure interne ed
+    // esterne lo dice il verso in cui gira il percorso: girando in senso antiorario la stanza è a
+    // sinistra. Un percorso che non gira (un tratto solo, o tratti allineati) non ha un dentro: asse.
+    const j = WallTool.just;
+    const area = polygonArea(ref);
+    let size = 0;
+    for (const q of ref) size = Math.max(size, Math.abs(q.x - ref[0].x), Math.abs(q.y - ref[0].y));
+    const turns = Math.abs(area) > 1e-9 * size * size;
+    const side = j === 'C' ? 0 : j === 'S' ? -1 : j === 'D' ? 1 : !turns ? 0 : (j === 'I') === area > 0 ? -1 : 1;
+    const off = (side * th) / 2;
+    // ogni tratto spostato per conto suo; dove due tratti si incontrano, l'angolo va sul punto in cui
+    // si tagliano. Su un'inversione (tratti paralleli) i due muri restano ciascuno al suo posto.
+    const n = pts.length, m = closed ? n : n - 1;
+    const segs: [Vec, Vec][] = [];
+    for (let i = 0; i < m; i++) {
+      const a = pts[i], b = pts[(i + 1) % n];
+      const o = mul(perp(norm(sub(b, a))), off);
+      segs.push([add(a, o), add(b, o)]);
     }
-    return out;
+    if (off !== 0) {
+      for (let i = 0; i < (closed ? m : m - 1); i++) {
+        const s1 = segs[i], s2 = segs[(i + 1) % m];
+        const X = lineLine(s1[0], s1[1], s2[0], s2[1]);
+        if (X) { s1[1] = X.p; s2[0] = X.p; }
+      }
+    }
+    return segs.map(([a, b]) => ({ t: 'wall', a, b, th, layer: 'MURI', ...(WallTool.pat ? { pat: WallTool.pat } : {}) }));
   }
 
   private commit(closed: boolean) {
@@ -87,7 +143,9 @@ export class WallTool extends Tool {
 
   preview(p: Vec): NewEnt[] {
     if (!this.pts.length || this.sub) return [];
-    return this.walls([...this.pts, p], false);
+    // il lato dello spessore lo decidono i punti già dati; con due soli, anche il cursore (non sono ancora fissati)
+    const path = [...this.pts, p];
+    return this.walls(path, false, this.pts.length >= 3 ? this.pts : path);
   }
 }
 
@@ -100,12 +158,23 @@ abstract class OpeningTool extends Tool {
   protected hg: 1 | -1 = 1;
   protected pickPt: Vec | null = null;
   private sub: '' | 'w' = '';
+  /** la finestra con la larghezza si apre una volta, all'avvio; dopo ogni vano si riparte da qui */
+  private asked = false;
   abstract readonly kind: 'door' | 'window';
 
   protected abstract get width(): number;
   protected abstract set width(w: number);
 
   start() {
+    if (!this.asked) {
+      this.asked = true;
+      this.withForm({
+        title: this.kind === 'door' ? 'Porta' : 'Finestra',
+        fields: [{ k: 'num', key: 'w', label: 'Larghezza del vano', unit: this.h.doc.settings.units, value: this.width }],
+        note: 'Poi: clic sul muro, e la distanza dallo spigolo si può scrivere nella riga di comando.',
+      }, v => { if (v) this.width = v.w as number; this.start(); });
+      return;
+    }
     this.wall = null; this.sub = ''; this.numberAsText = false;
     this.ask(`Specificare punto sul muro (larghezza ${fmtLen(this.width)}) o`, [O('L', 'Larghezza')]);
   }
@@ -303,6 +372,8 @@ export class DimTool extends Tool {
   readonly name: string;
   private a: Vec | null = null;
   private b: Vec | null = null;
+  /** muro scelto come oggetto da quotare: il filo lo decide il lato in cui si mette la linea di quota */
+  private wall: WallE | null = null;
   private override: string | undefined;
 
   constructor(h: Host, private aligned: boolean) {
@@ -325,8 +396,12 @@ export class DimTool extends Tool {
 
   entity(e: Ent, p: Vec) {
     let ends: [Vec, Vec] | null = null;
-    if (e.t === 'line' || e.t === 'wall') ends = [e.a, e.b];
-    else if (e.t === 'poly') {
+    if (e.t === 'line') ends = [e.a, e.b];
+    else if (e.t === 'wall') {
+      this.wall = e;
+      ends = this.wallFace(e, p);
+      this.h.msg('Di un muro si quota il filo, da spigolo a spigolo: l\'interno o l\'esterno secondo il lato in cui si mette la quota.');
+    } else if (e.t === 'poly') {
       let best = Infinity;
       const n = e.pts.length;
       for (let i = 0; i < (e.closed ? n : n - 1); i++) {
@@ -338,6 +413,19 @@ export class DimTool extends Tool {
     if (!ends) { this.h.msg('Selezionare una linea, una polilinea o un muro.'); return; }
     [this.a, this.b] = ends;
     this.ask('Specificare posizione della linea di quota o', [O('T', 'Testo')]);
+  }
+
+  /**
+   * Filo del muro dalla parte del punto p, da spigolo a spigolo. L'asse non si quota: dove il
+   * muro fa angolo finisce dentro lo spessore dell'altro, e la misura non sarebbe né l'interna né l'esterna.
+   */
+  private wallFace(w: WallE, p: Vec): [Vec, Vec] {
+    const n = perp(norm(sub(w.b, w.a)));
+    const left = dot(sub(p, w.a), n) >= 0;
+    const inf = this.h.doc.ctx().walls?.walls.get(w.id);
+    if (inf) return left ? [inf.sl, inf.el] : [inf.sr, inf.er];
+    const o = mul(n, (left ? w.th : -w.th) / 2);
+    return [add(w.a, o), add(w.b, o)];
   }
 
   option(k: string) {
@@ -352,16 +440,17 @@ export class DimTool extends Tool {
   }
 
   enter() {
-    if (!this.a) { this.ask('Selezionare l\'oggetto da quotare', [], undefined, 'entity'); return; }
+    if (!this.a) { this.ask('Selezionare l\'oggetto da quotare (di un muro: il filo dal lato in cui si mette la quota)', [], undefined, 'entity'); return; }
     this.h.done();
   }
 
   private make(p: Vec): NewEnt | null {
     if (!this.a || !this.b) return null;
-    const e: NewEnt = { t: 'dim', a: this.a, b: this.b, p, layer: 'QUOTE' };
+    const [a, b] = this.wall ? this.wallFace(this.wall, p) : [this.a, this.b];
+    const e: NewEnt = { t: 'dim', a, b, p, layer: 'QUOTE' };
     if (!this.aligned) {
-      const x0 = Math.min(this.a.x, this.b.x), x1 = Math.max(this.a.x, this.b.x);
-      const y0 = Math.min(this.a.y, this.b.y), y1 = Math.max(this.a.y, this.b.y);
+      const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x);
+      const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
       const dx = p.x < x0 ? x0 - p.x : p.x > x1 ? p.x - x1 : 0;
       const dy = p.y < y0 ? y0 - p.y : p.y > y1 ? p.y - y1 : 0;
       e.ang = dx > dy ? Math.PI / 2 : 0;

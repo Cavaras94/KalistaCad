@@ -1,5 +1,5 @@
 // Base dei comandi: richieste, opzioni, interpretazione delle coordinate digitate.
-import type { Ent, NewEnt } from '../model/entities';
+import type { Ent, NewEnt, Prim } from '../model/entities';
 import type { Doc } from '../model/document';
 import type { View } from '../view/view';
 import { Vec, v, add, mul, sub, len, norm, dist } from '../model/geom';
@@ -7,6 +7,27 @@ import { Vec, v, add, mul, sub, len, norm, dist } from '../model/geom';
 export interface Opt { key: string; label: string }
 
 export type InputMode = 'point' | 'select' | 'entity' | 'text' | 'none';
+
+/** Una voce della finestra con le impostazioni di un comando; when = si vede solo se la scelta when[0] vale when[1]. */
+export type FormField = { when?: [string, string] } & (
+  /** numero; min = il più piccolo ammesso (escluso, salvo minIncl; di partenza 0); free = qualunque numero; int = solo interi */
+  | { k: 'num'; key: string; label: string; value: number; unit?: string; min?: number; minIncl?: boolean; max?: number; free?: boolean; int?: boolean; hint?: string }
+  /** una scelta fra poche voci, a pulsanti */
+  | { k: 'choice'; key: string; label: string; value: string; options: [string, string][] }
+  /** una scelta fra riquadri con il disegno di ciascuna voce (retini, blocchi) */
+  | { k: 'tiles'; key: string; label: string; value: string; tiles: { value: string; label: string; prims: Prim[] }[] }
+  | { k: 'check'; key: string; label: string; value: boolean });
+
+export interface FormSpec {
+  title: string;
+  fields: FormField[];
+  /** riga di spiegazione in cima */
+  note?: string;
+  /** pulsante in più a sinistra (per esempio "Col mouse"): chiude la finestra con _extra = true */
+  extra?: string;
+}
+
+export type FormValues = Record<string, number | string | boolean> & { _extra?: boolean };
 
 /** Ciò che l'applicazione mette a disposizione dei comandi. */
 export interface Host {
@@ -32,6 +53,14 @@ export interface Host {
   pickImage(): Promise<{ src: string; w: number; h: number } | null>;
   /** riquadro per scrivere un testo su più righe, vicino al punto `at` del disegno; null se annullato */
   write(o: { title: string; value?: string; at?: Vec; onInput?: (s: string) => void }): Promise<string | null>;
+  /** vero se i comandi aprono le finestre con le loro impostazioni (si spengono nelle Impostazioni) */
+  readonly dialogs: boolean;
+  /** finestra con le impostazioni di un comando; null se la si chiude senza OK */
+  form(spec: FormSpec): Promise<FormValues | null>;
+  /** domanda sì/no con i pulsanti; def = la risposta di Invio; null se la si chiude senza rispondere */
+  confirm(title: string, text: string, def: boolean): Promise<boolean | null>;
+  /** vero se il comando è ancora quello in corso (o in attesa dietro uno zoom) */
+  isCurrent(t: Tool): boolean;
 }
 
 export abstract class Tool {
@@ -76,6 +105,37 @@ export abstract class Tool {
     this.def = def;
     this.mode = mode;
     this.h.refresh();
+  }
+
+  /**
+   * Impostazioni del comando in una finestra. Con le finestre spente nelle Impostazioni si va
+   * avanti subito con then(undefined) e i valori si danno nella riga di comando; chiudendo la
+   * finestra senza OK il comando finisce.
+   */
+  protected withForm(spec: FormSpec, then: (v: FormValues | undefined) => void) {
+    if (!this.h.dialogs) { then(undefined); return; }
+    this.ask(`${spec.title}: impostazioni nella finestra (Invio = OK, Esc = annulla)`, [], undefined, 'none');
+    void this.h.form(spec).then(v => {
+      if (!this.h.isCurrent(this)) return;
+      if (v === null) { this.h.msg('*Annullato*'); this.cancel(); this.h.setSelection([]); this.h.done(); return; }
+      then(v);
+    });
+  }
+
+  /**
+   * Domanda sì/no: nella riga di comando con le opzioni S e N e, se le finestre sono accese, anche
+   * in una finestra con i pulsanti. La risposta arriva a option('S' | 'N'); chiudendo la finestra
+   * senza rispondere resta la domanda nella riga di comando.
+   */
+  protected askYesNo(question: string, def: 'S' | 'N') {
+    this.ask(question, [O('S', 'Sì'), O('N', 'No')], def === 'S' ? 'Sì' : 'No', 'none');
+    if (!this.h.dialogs) return;
+    const asked = this.promptText;
+    void this.h.confirm(this.name, question.replace(/\?$/, '') + '?', def === 'S').then(r => {
+      if (r === null || !this.h.isCurrent(this) || this.promptText !== asked) return;
+      this.option(r ? 'S' : 'N');
+      this.h.refresh();
+    });
   }
 
   /** exact = solo la sigla dell'opzione, senza accettare l'inizio della sua etichetta */

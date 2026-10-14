@@ -568,3 +568,154 @@ describe('immagini', () => {
     expect(JSON.parse(JSON.stringify(doc.toData())).ents[0].src).toBe(im.src);
   });
 });
+
+// ---- versione 0.4.3: grip dei blocchi, quote sui fili dei muri, retini nuovi e muri con retino
+import { grips, moveGrip, explode } from '../src/model/entities';
+import { buildWallCtx } from '../src/model/walls';
+import { scaleAbout } from '../src/model/geom';
+
+describe('grip dei blocchi inseriti', () => {
+  const rect = (x: number, y: number): PolyE => ({ id: 1, layer: '0', t: 'poly', pts: [v(x, y), v(x + 80, y), v(x + 80, y + 60), v(x, y + 60)], closed: true });
+  const blocks = { sedia: { ents: [rect(500, 300)] }, tavolo: { ents: [rect(0, 0)] } };
+  const ctx = { ...DEFAULT_CTX, blocks };
+  const ins = (x: number, y: number): InsertE => ({ id: 9, layer: '0', t: 'insert', name: 'sedia', p: v(x, y), s: 1, rot: 0 });
+  it('punto base lontano dal disegno del blocco: c\'è anche un grip al centro, e sposta il blocco', () => {
+    const e = ins(0, 0);
+    expect(grips(e, ctx)).toEqual([v(0, 0), v(540, 330)]);
+    expect((moveGrip(e, 1, v(640, 330), ctx) as InsertE).p).toEqual(v(100, 0));
+    expect((moveGrip(e, 0, v(20, 30), ctx) as InsertE).p).toEqual(v(20, 30));
+  });
+  it('punto base sul disegno del blocco: basta quello', () => {
+    expect(grips({ ...ins(100, 50), name: 'tavolo' }, ctx)).toEqual([v(100, 50)]);
+    // senza sapere com'è fatto il blocco c'è solo il punto base
+    expect(grips(ins(0, 0))).toEqual([v(0, 0)]);
+    // un blocco senza definizione ha comunque il suo punto
+    expect(grips({ ...ins(5, 5), name: 'manca' }, ctx)).toEqual([v(5, 5)]);
+  });
+});
+
+describe('muri: snap sugli spigoli e riempimento con retino', () => {
+  const st: SnapSettings = { osnap: true, modes: new Set(['end', 'mid']), gridSnap: false, ortho: false, polar: false, polarInc: 45, otrack: false };
+  const room = () => {
+    const doc = new Doc();
+    doc.edit('t', () => {
+      doc.add({ t: 'wall', a: v(0, 0), b: v(400, 0), th: 30, layer: 'MURI' });
+      doc.add({ t: 'wall', a: v(400, 0), b: v(400, 300), th: 30, layer: 'MURI' });
+      doc.add({ t: 'wall', a: v(400, 300), b: v(0, 300), th: 30, layer: 'MURI' });
+      doc.add({ t: 'wall', a: v(0, 300), b: v(0, 0), th: 30, layer: 'MURI' });
+      doc.add({ t: 'wall', a: v(600, 0), b: v(900, 0), th: 30, layer: 'MURI' });
+    });
+    return doc;
+  };
+  const near = (p: { x: number; y: number }, x: number, y: number) => { close(p.x, x); close(p.y, y); };
+  it('dove due muri fanno angolo, fra asse e spigolo vince lo spigolo; sull\'asse si aggancia ancora l\'asse', () => {
+    const doc = room();
+    // a metà strada fra la fine dell'asse (0,0) e lo spigolo interno (15,15), e poi quello esterno
+    near(findSnap(doc, v(7, 7), 30, st).p, 15, 15);
+    near(findSnap(doc, v(-7, -7), 30, st).p, -15, -15);
+    near(findSnap(doc, v(1, 1), 30, st).p, 0, 0);
+    // un muro che finisce libero: la fine dell'asse è il mezzo della testata, e vale come gli spigoli
+    near(findSnap(doc, v(601, 6), 30, st).p, 600, 0);
+  });
+  it('un muro con il retino si disegna a righe, che non fanno da bordo, da snap né da pezzi esplosi', () => {
+    const plain: WallE = { id: 1, layer: 'MURI', t: 'wall', a: v(0, 0), b: v(300, 0), th: 30 };
+    const pat: WallE = { ...plain, pat: 'ansi31' };
+    const ctx = { ...DEFAULT_CTX, walls: buildWallCtx([pat]) };
+    const pls = (e: WallE) => prims(e, ctx).filter(p => p.k === 'pl') as Extract<Prim, { k: 'pl' }>[];
+    expect(pls(plain).some(p => p.fill === 'wall')).toBe(true);
+    const ps = pls(pat);
+    expect(ps.some(p => p.fill === 'wall')).toBe(false);
+    expect(ps.filter(p => p.fill === 'hit').length).toBe(1);
+    const deco = ps.filter(p => p.deco);
+    // passo predefinito = un terzo dello spessore: righe a 45° ogni 10, cioè una ogni 14 lungo il muro di 300
+    expect(deco.length).toBeGreaterThan(20);
+    for (const p of deco) for (const q of p.pts) { expect(Math.abs(q.y)).toBeLessThan(15 + 1e-6); expect(q.x).toBeGreaterThan(-1e-6); expect(q.x).toBeLessThan(300 + 1e-6); }
+    expect(pls({ ...pat, sp: 30 }).filter(p => p.deco).length).toBeLessThan(deco.length / 2);
+    expect(boundaryCurves([pat], ctx).length).toBe(boundaryCurves([plain], ctx).length);
+    expect(snapPoints(pat, ctx).length).toBe(snapPoints(plain, ctx).length);
+    expect(explode(pat, ctx)!.length).toBe(explode(plain, ctx)!.length);
+    // scalando il muro si scala anche il passo scelto a mano
+    expect((transform({ ...pat, sp: 6 }, scaleAbout(v(0, 0), 0.01)) as WallE).sp).toBeCloseTo(0.06);
+    expect((transform(pat, scaleAbout(v(0, 0), 0.01)) as WallE).sp).toBeUndefined();
+  });
+  it('in stampa il muro con il retino esce a righe anche con i muri pieni neri, e nel DXF le righe ci sono', () => {
+    const mk = (withPat: boolean) => {
+      const doc = new Doc();
+      doc.edit('t', () => { doc.add({ t: 'wall', a: v(0, 0), b: v(300, 0), th: 30, layer: 'MURI', ...(withPat ? { pat: 'ansi31' as const } : {}) }); });
+      return doc;
+    };
+    const opts = (doc: Doc) => ({ paper: 'A4', landscape: true, scale: 100, area: doc.extents()!, title: false, mono: true, lineweights: true, wallFill: 'nero', fields: { cliente: '', posa: '', note: '' } }) as unknown as Parameters<typeof buildSheet>[1];
+    const a = mk(false), b = mk(true);
+    const paths = (doc: Doc) => buildSheet(doc, opts(doc)).svg.match(/<path [^>]*>/g) ?? [];
+    expect(paths(a).some(p => p.includes('fill="#000"'))).toBe(true);
+    expect(paths(b).some(p => p.includes('fill="#000"'))).toBe(false);
+    expect(paths(b).length).toBeGreaterThan(paths(a).length + 15);
+    const dxfLines = (doc: Doc) => (exportDxf(doc).match(/^LINE\r?$/gm) ?? []).length;
+    expect(dxfLines(b)).toBeGreaterThan(dxfLines(a) + 15);
+  });
+});
+
+describe('retini nuovi', () => {
+  type PL = Extract<Prim, { k: 'pl' }>;
+  const sq = [v(0, 0), v(240, 0), v(240, 240), v(0, 240)];
+  const lines = (pat: HatchE['pat'], ang = 0) => prims({ id: 1, layer: '0', t: 'hatch', loops: [sq], pat, sp: 10, ang }).filter(p => p.k === 'pl') as PL[];
+  const dirOf = (p: PL) => Math.round(((Math.atan2(p.pts[1].y - p.pts[0].y, p.pts[1].x - p.pts[0].x) * 180) / Math.PI + 360) % 180) % 180;
+  const dirs = (ps: PL[]) => [...new Set(ps.map(dirOf))].sort((a, b) => a - b);
+  const inside = (p: PL) => p.pts.every(q => q.x > 1 && q.x < 239 && q.y > 1 && q.y < 239);
+  it('doppie linee: il doppio delle righe del 45°', () => {
+    expect(Math.abs(lines('ansi32').length - 2 * lines('ansi31').length)).toBeLessThanOrEqual(2);
+    expect(dirs(lines('ansi32'))).toEqual([45]);
+  });
+  it('spina di pesce: elementi lunghi tre passi nei due versi a 45°; ruotata di 45° viene dritta', () => {
+    const ps = lines('herring');
+    expect(dirs(ps)).toEqual([45, 135]);
+    const inner = ps.filter(inside);
+    expect(inner.length).toBeGreaterThan(20);
+    for (const p of inner) close(dist(p.pts[0], p.pts[1]), 30);
+    expect(dirs(lines('herring', Math.PI / 4))).toEqual([0, 90]);
+  });
+  it('listoni: giunti verticali alti un corso, a sei passi l\'uno dall\'altro e sfalsati fra corsi vicini', () => {
+    const joints = lines('plank').filter(p => Math.abs(p.pts[0].x - p.pts[1].x) < 1e-9);
+    expect(joints.length).toBeGreaterThan(15);
+    for (const j of joints) close(Math.abs(j.pts[0].y - j.pts[1].y), 10);
+    const xs = (y: number) => joints.filter(j => Math.abs(Math.min(j.pts[0].y, j.pts[1].y) - y) < 1e-6).map(j => Math.round(j.pts[0].x)).sort((a, b) => a - b);
+    const row = xs(30);
+    expect(row.length).toBeGreaterThanOrEqual(2);
+    for (let i = 1; i < row.length; i++) expect(row[i] - row[i - 1]).toBe(60);
+    expect(row.some(x => xs(40).includes(x))).toBe(false);
+    expect(xs(60)).toEqual(row);
+  });
+  it('zig-zag: i due versi si incontrano sulle punte', () => {
+    const ps = lines('zigzag');
+    expect(dirs(ps)).toEqual([45, 135]);
+    const key = (q: { x: number; y: number }) => `${Math.round(q.x * 1000)}:${Math.round(q.y * 1000)}`;
+    const up = new Set(ps.filter(p => dirOf(p) === 45).flatMap(p => p.pts.map(key)));
+    const down = ps.filter(p => dirOf(p) === 135 && inside(p));
+    expect(down.length).toBeGreaterThan(10);
+    for (const p of down) for (const q of p.pts) expect(up.has(key(q))).toBe(true);
+  });
+});
+
+describe('muri con il retino: si tiene modificandoli', () => {
+  const w: WallE = { id: 1, layer: 'MURI', t: 'wall', a: v(0, 0), b: v(400, 0), th: 30, pat: 'brick', sp: 5 };
+  it('offset, spezza e taglia nel mezzo danno muri con lo stesso retino', () => {
+    const off = offsetEnt(w, 100, v(200, 200)) as WallE;
+    expect([off.pat, off.sp]).toEqual(['brick', 5]);
+    const pieces = breakEnt(w, v(100, 0), v(200, 0)) as WallE[];
+    expect(pieces.length).toBe(2);
+    for (const p of pieces) expect([p.pat, p.sp]).toEqual(['brick', 5]);
+    const cutters: Ent[] = [L(2, 150, -50, 150, 50), L(3, 250, -50, 250, 50)];
+    const cut = trimEnt(w, boundaryCurves(cutters), v(200, 0)) as WallE[];
+    expect(cut.length).toBe(2);
+    for (const p of cut) expect([p.pat, p.sp]).toEqual(['brick', 5]);
+    // un muro senza retino resta senza
+    const { pat: _p, sp: _s, ...bare } = w;
+    expect((offsetEnt(bare, 100, v(200, 200)) as WallE).pat).toBeUndefined();
+  });
+  it('un muro pieno è un riempimento: esplodendolo o esportandolo non nasce un contorno in più', () => {
+    const { pat: _p, sp: _s, ...plain } = w;
+    const solid: WallE = { ...plain, pat: 'solid' };
+    expect(explode(solid, DEFAULT_CTX)!.map(e => e.t)).toEqual(explode(plain, DEFAULT_CTX)!.map(e => e.t));
+    expect(prims(solid).some(p => p.k === 'pl' && p.fill === 'solid')).toBe(true);
+  });
+});

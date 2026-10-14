@@ -53,6 +53,11 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
     case 'wall': return [
       { label: 'Spessore', kind: 'num', get: e => (e.t === 'wall' ? e.th : 0), set: numSet('th') },
       { label: 'Lunghezza', kind: 'ro', single: true, get: e => e.t === 'wall' ? fmt(dist(e.a, e.b)) : '' },
+      {
+        label: 'Riempimento', kind: 'select', options: [['', 'Normale'], ...(Object.entries(HATCH_NAMES) as [string, string][])], get: e => (e.t === 'wall' ? e.pat ?? '' : ''),
+        set: (e, v) => { if (e.t !== 'wall') return null; const c = { ...e }; if (v) c.pat = v as HatchPattern; else { delete c.pat; delete c.sp; } return c; },
+      },
+      { label: 'Passo retino', kind: 'num', get: e => (e.t === 'wall' ? e.sp ?? Math.round((e.th / 3) * 1000) / 1000 : 0), set: (e, v) => (e.t === 'wall' && e.pat ? numSet('sp')(e, v) : null) },
     ];
     case 'door': return [
       { label: 'Larghezza', kind: 'num', get: e => (e.t === 'door' ? e.w : 0), set: numSet('w') },

@@ -1,5 +1,5 @@
 // Operazioni di modifica: offset, taglia, estendi, raccorda, unisci, contorni.
-import type { Ent, NewEnt, PolyE, LineE, WallE, PrimCtx } from './entities';
+import type { Ent, NewEnt, PolyE, LineE, WallE, PrimCtx, HatchPattern } from './entities';
 import { primCurves, prims, polyPoints, ellipsePoints, splinePoints, isEllipseArc, DEFAULT_CTX } from './entities';
 import {
   Vec, Curve, Mat, v, add, sub, mul, dot, cross, len, dist, perp, norm, angleOf, polar, normAng, sweep, lerp, same,
@@ -18,6 +18,12 @@ export function curveAsPoly(e: Ent): Ent {
   if (e.t === 'ellipse') return { ...baseOf(e), id: e.id, t: 'poly', pts: ellipsePoints(e), closed: !isEllipseArc(e) };
   if (e.t === 'spline') return { ...baseOf(e), id: e.id, t: 'poly', pts: splinePoints(e.pts, e.closed), closed: e.closed };
   return e;
+}
+
+/** Retino e passo di un muro, da portare sui muri che se ne ricavano (offset, taglio, spezzatura). */
+function wallFillOf(e: Ent): { pat?: HatchPattern; sp?: number } {
+  if (e.t !== 'wall' || !e.pat) return {};
+  return e.sp !== undefined ? { pat: e.pat, sp: e.sp } : { pat: e.pat };
 }
 
 // ---------------------------------------------------------------- offset
@@ -121,7 +127,7 @@ export function offsetEnt(e0: Ent, d: number, side: Vec): NewEnt | null {
       const o = mul(n, dot(sub(side, e.a), n) >= 0 ? d : -d);
       return e.t === 'line'
         ? { ...b, t: 'line', a: add(e.a, o), b: add(e.b, o) }
-        : { ...b, t: 'wall', a: add(e.a, o), b: add(e.b, o), th: e.th };
+        : { ...b, t: 'wall', a: add(e.a, o), b: add(e.b, o), th: e.th, ...wallFillOf(e) };
     }
     case 'circle': case 'arc': {
       const r = e.r + (dist(side, e.c) > e.r ? d : -d);
@@ -341,7 +347,7 @@ export function trimEnt(e0: Ent, cutters: Curve[], pick: Vec): NewEnt[] | null {
     const p0 = chainPoint(ch, t0), p1 = chainPoint(ch, t1);
     switch (e.t) {
       case 'line': out.push({ ...b, t: 'line', a: p0, b: p1 }); break;
-      case 'wall': out.push({ ...b, t: 'wall', a: p0, b: p1, th: e.th }); break;
+      case 'wall': out.push({ ...b, t: 'wall', a: p0, b: p1, th: e.th, ...wallFillOf(e) }); break;
       case 'arc': out.push({ ...b, t: 'arc', c: e.c, r: e.r, a0: angleOf(e.c, p0), a1: angleOf(e.c, p1) }); break;
       case 'poly': { const p = polyPiece(e, t0, t1); if (p) out.push(p); break; }
     }
@@ -702,7 +708,7 @@ export function breakEnt(e0: Ent, p1: Vec, p2: Vec): NewEnt[] | null {
     const q0 = chainPoint(ch, t0), q1 = chainPoint(ch, t1);
     switch (e.t) {
       case 'line': return { ...b, t: 'line', a: q0, b: q1 };
-      case 'wall': return { ...b, t: 'wall', a: q0, b: q1, th: e.th };
+      case 'wall': return { ...b, t: 'wall', a: q0, b: q1, th: e.th, ...wallFillOf(e) };
       case 'arc': case 'circle': return { ...b, t: 'arc', c: e.c, r: e.r, a0: angleOf(e.c, q0), a1: angleOf(e.c, q1) };
       case 'poly': return polyPiece(e, t0, t1);
       default: return null;

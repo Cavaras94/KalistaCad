@@ -184,7 +184,7 @@ function paintPrims(g: CanvasRenderingContext2D, view: View, ps: Prim[], st: Pai
 }
 
 function fill(g: CanvasRenderingContext2D, f: string, st: PaintStyle, rule: CanvasFillRule) {
-  const alpha = f === 'wall' ? st.wallAlpha : f === 'tint' ? (st.tint ? 0.07 : 0) : 1;
+  const alpha = f === 'wall' ? st.wallAlpha : f === 'tint' ? (st.tint ? 0.07 : 0) : f === 'hit' ? 0 : 1;
   if (alpha <= 0) return;
   const ga = g.globalAlpha;
   g.globalAlpha = ga * alpha;

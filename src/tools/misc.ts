@@ -196,7 +196,7 @@ export class GripTool extends Tool {
   start() {
     for (const e of this.h.doc.ents) {
       if (!this.h.selection.has(e.id) || !this.h.doc.isEditable(e)) continue;
-      grips(e).forEach((g, i) => { if (same(g, this.hot, 1e-9)) this.targets.push({ e, i }); });
+      grips(e, this.h.doc.ctx()).forEach((g, i) => { if (same(g, this.hot, 1e-9)) this.targets.push({ e, i }); });
     }
     if (!this.targets.length) { this.h.done(); return; }
     this.base = this.hot;
@@ -205,7 +205,7 @@ export class GripTool extends Tool {
   }
 
   private moved(p: Vec): Ent[] {
-    return this.targets.map(t => moveGrip(t.e, t.i, p));
+    return this.targets.map(t => moveGrip(t.e, t.i, p, this.h.doc.ctx()));
   }
 
   point(p: Vec) {

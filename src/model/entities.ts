@@ -10,10 +10,11 @@ import { wallPrims, buildWallCtx } from './walls';
 
 export type HAlign = 'l' | 'c' | 'r';
 export type VAlign = 'b' | 'm' | 't';
-export type HatchPattern = 'solid' | 'ansi31' | 'ansi37' | 'lines' | 'grid' | 'brick' | 'dash' | 'dots';
+export type HatchPattern = 'solid' | 'ansi31' | 'ansi32' | 'ansi37' | 'lines' | 'grid' | 'brick' | 'plank' | 'herring' | 'dash' | 'dots' | 'zigzag' | 'concrete';
 export const HATCH_NAMES: Record<HatchPattern, string> = {
-  solid: 'Pieno', ansi31: 'Linee a 45°', ansi37: 'Incrociato a 45°', lines: 'Linee', grid: 'Quadretti (piastrelle)',
-  brick: 'Mattoni', dash: 'Linee tratteggiate', dots: 'Puntinato',
+  solid: 'Pieno', ansi31: 'Linee a 45°', ansi32: 'Doppie linee a 45° (muratura)', ansi37: 'Incrociato a 45°', lines: 'Linee',
+  grid: 'Quadretti (piastrelle)', brick: 'Mattoni', plank: 'Listoni sfalsati', herring: 'Spina di pesce',
+  dash: 'Linee tratteggiate', dots: 'Puntinato', zigzag: 'Zig-zag (isolante)', concrete: 'Calcestruzzo',
 };
 
 /** lt e lw: tipo di linea e spessore di stampa propri dell'entità; assenti = quelli del layer. */
@@ -32,7 +33,8 @@ export interface TextE extends Base { t: 'text'; p: Vec; s: string; h: number; r
  */
 export type DimKind = 'rad' | 'dia' | 'ang';
 export interface DimE extends Base { t: 'dim'; a: Vec; b: Vec; p: Vec; ang?: number; s?: string; k?: DimKind; c?: Vec; h?: number }
-export interface WallE extends Base { t: 'wall'; a: Vec; b: Vec; th: number }
+/** Muro. pat = retino al posto del riempimento (assente = riempimento normale); sp = passo del retino (assente = un terzo dello spessore). */
+export interface WallE extends Base { t: 'wall'; a: Vec; b: Vec; th: number; pat?: HatchPattern; sp?: number }
 export interface DoorE extends Base { t: 'door'; p: Vec; ang: number; w: number; th: number; sw: 1 | -1; hg: 1 | -1 }
 export interface WindowE extends Base { t: 'window'; p: Vec; ang: number; w: number; th: number }
 export interface RoomE extends Base { t: 'room'; pts: Vec[]; name: string }
@@ -73,9 +75,11 @@ export const TYPE_NAMES: Record<EntType, string> = {
 
 // ---------------------------------------------------------------- primitive
 
-export type Fill = 'wall' | 'solid' | 'tint';
+/** hit = non si vede: serve solo a prendere l'entità cliccandoci dentro. */
+export type Fill = 'wall' | 'solid' | 'tint' | 'hit';
+/** deco = tratto di sola decorazione (le righe del retino di un muro): si disegna, ma non fa da bordo né da snap. */
 export type Prim =
-  | { k: 'pl'; pts: Vec[]; closed?: boolean; fill?: Fill; stroke?: boolean }
+  | { k: 'pl'; pts: Vec[]; closed?: boolean; fill?: Fill; stroke?: boolean; deco?: boolean }
   | { k: 'arc'; c: Vec; r: number; a0: number; a1: number; full?: boolean }
   | { k: 'text'; p: Vec; s: string; h: number; rot: number; ha: HAlign; va: VAlign }
   | { k: 'area'; loops: Vec[][]; fill: Fill }
@@ -379,24 +383,36 @@ function roomPrims(e: RoomE, ctx: PrimCtx): Prim[] {
 const MAX_HATCH_LINES = 4000;
 
 /**
- * Una famiglia di righe parallele di un retino: ang = inclinazione; dash = [tratto, vuoto] in multipli
- * del passo (assente = riga continua); stagger = di quanto è sfalsato il tratteggio fra una riga e la
- * successiva, sempre in multipli del passo.
+ * Una famiglia di righe parallele di un retino, come nei file .pat dei CAD, in multipli del passo:
+ * ang = inclinazione; o = punto per cui passa la prima riga e da cui parte il suo tratteggio (assente
+ * = l'origine); dy = distanza fra le righe (assente = 1); dx = di quanto scorre il tratteggio da una
+ * riga alla successiva; dash = [tratto, vuoto] (assente = riga continua).
  */
 const MAX_HATCH_DASHES = 60000;
-interface HatchFam { ang: number; dash?: [number, number]; stagger?: number }
+interface HatchFam { ang: number; o?: [number, number]; dy?: number; dx?: number; dash?: [number, number] }
+const Q = Math.PI / 4, R2 = Math.SQRT2;
 const HATCH_FAMS: Record<Exclude<HatchPattern, 'solid'>, HatchFam[]> = {
-  ansi31: [{ ang: Math.PI / 4 }],
-  ansi37: [{ ang: Math.PI / 4 }, { ang: -Math.PI / 4 }],
+  ansi31: [{ ang: Q }],
+  // coppie di righe: la seconda a un terzo del passo dalla prima
+  ansi32: [{ ang: Q }, { ang: Q, o: [R2 / 3, 0] }],
+  ansi37: [{ ang: Q }, { ang: -Q }],
   lines: [{ ang: 0 }],
   grid: [{ ang: 0 }, { ang: Math.PI / 2 }],
   // corsi orizzontali, e giunti verticali alterni: mattoni lunghi due passi e alti uno
-  brick: [{ ang: 0 }, { ang: Math.PI / 2, dash: [1, 1], stagger: 1 }],
-  dash: [{ ang: Math.PI / 4, dash: [1.5, 0.75] }],
-  dots: [{ ang: 0, dash: [0.12, 0.88], stagger: 0.5 }],
+  brick: [{ ang: 0 }, { ang: Math.PI / 2, dash: [1, 1], dx: 1 }],
+  // listoni lunghi sei passi e alti uno, sfalsati di un terzo da un corso all'altro
+  plank: [{ ang: 0 }, { ang: Math.PI / 2, dy: 2, dash: [1, 2], dx: 1 }],
+  // elementi lunghi tre passi e larghi uno, a 45°; con l'angolo a 45° la spina viene dritta
+  herring: [{ ang: Q, dash: [3, 1], dx: 1 }, { ang: 3 * Q, o: [R2 / 2, R2 / 2], dash: [3, 1], dx: -1 }],
+  dash: [{ ang: Q, dash: [1.5, 0.75] }],
+  dots: [{ ang: 0, dash: [0.12, 0.88], dx: 0.5 }],
+  // file di denti alti un passo, con un passo vuoto fra una fila e l'altra
+  zigzag: [{ ang: Q, dy: R2, dash: [R2, R2], dx: R2 }, { ang: -Q, o: [1, -1], dy: R2, dash: [R2, R2], dx: R2 }],
+  // puntini e trattini corti sparsi, con passi che non vanno a tempo fra loro
+  concrete: [{ ang: 0, dash: [0.08, 1.12], dx: 0.37 }, { ang: 1, dy: 1.3, dash: [0.3, 2.3], dx: 0.71 }, { ang: -0.7, dy: 1.7, dash: [0.25, 2.9], dx: 1.13 }],
 };
 
-function hatchPrims(e: HatchE): Prim[] {
+function hatchPrims(e: Pick<HatchE, 'loops' | 'pat' | 'sp' | 'ang'>): Prim[] {
   const loops = e.loops.filter(l => l.length >= 3);
   if (!loops.length) return [];
   if (e.pat === 'solid') return [{ k: 'area', loops, fill: 'solid' }];
@@ -410,22 +426,24 @@ function hatchPrims(e: HatchE): Prim[] {
       if (s < lo) lo = s;
       if (s > hi) hi = s;
     }
+    const fd = dirOf(fam.ang), fo = v(fam.o?.[0] ?? 0, fam.o?.[1] ?? 0);
+    const s0 = dot(fo, perp(fd)), ph = dot(fo, fd), dy = fam.dy ?? 1;
     let sp = Math.max(e.sp, 1e-9);
-    if ((hi - lo) / sp > MAX_HATCH_LINES) sp = (hi - lo) / MAX_HATCH_LINES;
+    if ((hi - lo) / (sp * dy) > MAX_HATCH_LINES) sp = (hi - lo) / (MAX_HATCH_LINES * dy);
     // un retino a tratti troppo fitto per l'area (centinaia di migliaia di trattini) si disegna a righe continue
     let dashed = !!fam.dash;
     if (fam.dash) {
       let tlo = Infinity, thi = -Infinity;
       for (const p of pts) { const t = dot(p, d); if (t < tlo) tlo = t; if (t > thi) thi = t; }
-      if (((hi - lo) / sp) * ((thi - tlo) / ((fam.dash[0] + fam.dash[1]) * sp)) > MAX_HATCH_DASHES) dashed = false;
+      if (((hi - lo) / (sp * dy)) * ((thi - tlo) / ((fam.dash[0] + fam.dash[1]) * sp)) > MAX_HATCH_DASHES) dashed = false;
     }
-    for (let i = Math.ceil(lo / sp); i * sp <= hi; i++) {
-      const o = mul(n, i * sp);
+    for (let i = Math.ceil((lo / sp - s0) / dy - 1e-9); (s0 + i * dy) * sp <= hi; i++) {
+      const o = mul(n, (s0 + i * dy) * sp);
       for (const [p, q] of clipLineToLoops(o, d, loops)) {
         if (!fam.dash || !dashed) { out.push({ k: 'pl', pts: [p, q] }); continue; }
         // riga tratteggiata: i tratti sono ancorati all'origine del disegno, sfalsati di riga in riga
         const on = fam.dash[0] * sp, period = (fam.dash[0] + fam.dash[1]) * sp;
-        const shift = (((i % 2) + 2) % 2) * (fam.stagger ?? 0) * sp;
+        const shift = (ph + i * (fam.dx ?? 0)) * sp;
         const t0 = dot(p, d), t1 = dot(q, d);
         if ((t1 - t0) / period > MAX_HATCH_LINES) { out.push({ k: 'pl', pts: [p, q] }); continue; }
         for (let k = Math.floor((t0 - shift) / period); shift + k * period < t1; k++) {
@@ -434,6 +452,19 @@ function hatchPrims(e: HatchE): Prim[] {
         }
       }
     }
+  }
+  return out;
+}
+
+/** Muro con un retino: al posto del riempimento normale, le righe del retino dentro ogni suo pezzo. */
+function wallFill(e: WallE, ps: Prim[]): Prim[] {
+  if (!e.pat) return ps;
+  const out: Prim[] = [];
+  for (const p of ps) {
+    if (p.k !== 'pl' || p.fill !== 'wall') { out.push(p); continue; }
+    if (e.pat === 'solid') { out.push({ ...p, fill: 'solid' }); continue; }
+    out.push({ ...p, fill: 'hit' });
+    for (const h of hatchPrims({ loops: [p.pts], pat: e.pat, sp: e.sp ?? e.th / 3, ang: 0 })) out.push(h.k === 'pl' ? { ...h, deco: true } : h);
   }
   return out;
 }
@@ -568,7 +599,7 @@ export function prims(e: Ent, ctx: PrimCtx = DEFAULT_CTX): Prim[] {
     case 'arc': return [{ k: 'arc', c: e.c, r: e.r, a0: e.a0, a1: e.a1 }];
     case 'text': return [{ k: 'text', p: e.p, s: e.s, h: e.h, rot: e.rot, ha: e.ha, va: e.va }];
     case 'dim': return dimPrims(e, ctx);
-    case 'wall': return wallPrims(e, ctx.walls, blockWalls.get(e)?.wall);
+    case 'wall': return wallFill(e, wallPrims(e, ctx.walls, blockWalls.get(e)?.wall));
     case 'door': return doorPrims(e, ctx);
     case 'window': return windowPrims(e, ctx);
     case 'room': return roomPrims(e, ctx);
@@ -591,6 +622,7 @@ export function primCurves(ps: Prim[]): Curve[] {
   const out: Curve[] = [];
   for (const p of ps) {
     if (p.k === 'pl') {
+      if (p.deco) continue;
       for (let i = 0; i + 1 < p.pts.length; i++) out.push(seg(p.pts[i], p.pts[i + 1]));
       if (p.closed && p.pts.length > 2) out.push(seg(p.pts[p.pts.length - 1], p.pts[0]));
     } else if (p.k === 'arc') out.push(arcC(p.c, p.r, p.a0, p.a1, p.full));
@@ -647,7 +679,8 @@ export function entBox(e: Ent, ctx: PrimCtx = DEFAULT_CTX): Box {
 
 export type SnapKind = 'end' | 'mid' | 'cen' | 'quad' | 'ins' | 'int' | 'perp' | 'near' | 'grid';
 
-export interface SnapPt { p: Vec; k: SnapKind }
+/** low = punto che non si vede (l'asse di un muro dove fa angolo): lì vicino vince uno snap che si vede. */
+export interface SnapPt { p: Vec; k: SnapKind; low?: boolean }
 
 export function snapPoints(e: Ent, ctx: PrimCtx = DEFAULT_CTX): SnapPt[] {
   const out: SnapPt[] = [];
@@ -676,10 +709,15 @@ export function snapPoints(e: Ent, ctx: PrimCtx = DEFAULT_CTX): SnapPt[] {
     }
     case 'text': P(e.p, 'ins'); break;
     case 'dim': P(e.a, e.k ? 'cen' : 'end'); P(e.b, 'end'); P(e.p, 'ins'); if (e.c) P(e.c, 'end'); break;
-    case 'wall':
-      P(e.a, 'end'); P(e.b, 'end'); P(mid(e.a, e.b), 'mid');
-      for (const p of prims(e, ctx)) if (p.k === 'pl' && p.stroke !== false) p.pts.forEach(q => P(q, 'end'));
+    case 'wall': {
+      // dove il muro fa angolo o si innesta in un altro, la fine dell'asse cade dentro lo spessore:
+      // resta agganciabile, ma lì vicino vincono gli spigoli che si vedono
+      const inf = blockWalls.get(e)?.wall ?? ctx.walls?.walls.get(e.id);
+      out.push({ p: e.a, k: 'end', low: !!inf && !inf.capS }, { p: e.b, k: 'end', low: !!inf && !inf.capE });
+      P(mid(e.a, e.b), 'mid');
+      for (const p of prims(e, ctx)) if (p.k === 'pl' && p.stroke !== false && !p.deco) p.pts.forEach(q => P(q, 'end'));
       break;
+    }
     case 'door': case 'window': {
       const u = dirOf(e.ang);
       P(e.p, 'mid'); P(add(e.p, mul(u, e.w / 2)), 'end'); P(sub(e.p, mul(u, e.w / 2)), 'end');
@@ -708,7 +746,27 @@ export function snapPoints(e: Ent, ctx: PrimCtx = DEFAULT_CTX): SnapPt[] {
 
 // ---------------------------------------------------------------- grip
 
-export function grips(e: Ent): Vec[] {
+const insertGrips = new WeakMap<InsertE, { ctx: PrimCtx; g: Vec[] }>();
+
+/**
+ * Grip di un blocco inserito: il punto base e, quando il punto base cade fuori dal disegno del
+ * blocco (succede con i blocchi importati), anche il centro del suo ingombro. Tutti e due lo spostano.
+ */
+function insertGripPts(e: InsertE, ctx: PrimCtx): Vec[] {
+  const c = insertGrips.get(e);
+  if (c && c.ctx === ctx) return c.g;
+  const g = [e.p];
+  if (ctx.blocks?.[e.name]) {
+    const b = entBox(e, ctx);
+    const m = Math.max(b.x1 - b.x0, b.y1 - b.y0) * 0.05;
+    if (b.x1 >= b.x0 && (e.p.x < b.x0 - m || e.p.x > b.x1 + m || e.p.y < b.y0 - m || e.p.y > b.y1 + m)) g.push(v((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2));
+  }
+  insertGrips.set(e, { ctx, g });
+  return g;
+}
+
+/** ctx serve solo ai blocchi inseriti, per sapere dove cade il loro disegno. */
+export function grips(e: Ent, ctx?: PrimCtx): Vec[] {
   switch (e.t) {
     case 'line': return [e.a, mid(e.a, e.b), e.b];
     case 'poly': return e.pts;
@@ -722,7 +780,8 @@ export function grips(e: Ent): Vec[] {
     case 'hatch': return e.loops.flat();
     case 'ellipse': { const b = mul(perp(e.a), e.k); return [e.c, add(e.c, e.a), sub(e.c, e.a), add(e.c, b), sub(e.c, b)]; }
     case 'spline': case 'leader': return e.pts;
-    case 'insert': case 'point': return [e.p];
+    case 'insert': return ctx ? insertGripPts(e, ctx) : [e.p];
+    case 'point': return [e.p];
     case 'image': return [e.p, imageCorners(e)[2]];
   }
 }
@@ -738,8 +797,8 @@ export function arc3(p1: Vec, p2: Vec, p3: Vec): { c: Vec; r: number; a0: number
   return { c, r: dist(c, p1), a0: ccw ? a1 : a3, a1: ccw ? a3 : a1 };
 }
 
-export function moveGrip(e: Ent, i: number, p: Vec): Ent {
-  const d = sub(p, grips(e)[i]);
+export function moveGrip(e: Ent, i: number, p: Vec, ctx?: PrimCtx): Ent {
+  const d = sub(p, grips(e, ctx)[i] ?? grips(e)[0]);
   switch (e.t) {
     case 'line': case 'wall':
       if (i === 0) return { ...e, a: p };
@@ -765,7 +824,8 @@ export function moveGrip(e: Ent, i: number, p: Vec): Ent {
       const a = arc3(pts[0], pts[1], pts[2]);
       return a ? { ...e, ...a } : e;
     }
-    case 'text': case 'door': case 'window': case 'insert': case 'point': return { ...e, p };
+    case 'text': case 'door': case 'window': case 'point': return { ...e, p };
+    case 'insert': return { ...e, p: add(e.p, d) };
     case 'image': {
       if (i === 0) return { ...e, p };
       // il grip sull'angolo opposto ingrandisce o rimpicciolisce l'immagine senza deformarla
@@ -812,7 +872,10 @@ export function transform<E extends Ent>(e: E, m: Mat): E {
       if (x.c) r.c = P(x.c);
       if (x.h !== undefined) r.h = x.h * s;
       break;
-    case 'wall': r = { ...x, a: P(x.a), b: P(x.b), th: x.th * s }; break;
+    case 'wall':
+      r = { ...x, a: P(x.a), b: P(x.b), th: x.th * s };
+      if (x.sp !== undefined) r.sp = x.sp * s;
+      break;
     case 'door': r = { ...x, p: P(x.p), ang: mapAngle(m, x.ang), w: x.w * s, th: x.th * s, sw: mirror ? (-x.sw as 1 | -1) : x.sw }; break;
     case 'window': r = { ...x, p: P(x.p), ang: mapAngle(m, x.ang), w: x.w * s, th: x.th * s }; break;
     case 'room': r = { ...x, pts: x.pts.map(P) }; break;
@@ -886,7 +949,7 @@ export function explode(e: Ent, ctx: PrimCtx = DEFAULT_CTX): NewEnt[] | null {
   const out: NewEnt[] = [];
   for (const p of prims(e, ctx)) {
     if (p.k === 'pl') {
-      if (p.stroke === false) continue;
+      if (p.stroke === false || p.deco) continue;
       if (p.pts.length === 2 && !p.closed) out.push({ ...base, t: 'line', a: p.pts[0], b: p.pts[1] });
       else out.push({ ...base, t: 'poly', pts: p.pts, closed: !!p.closed });
     } else if (p.k === 'arc') {

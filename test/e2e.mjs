@@ -33,7 +33,8 @@ const check = (name, ok, detail = '') => {
 
 await page.goto(url);
 await page.waitForFunction(() => window.app);
-await page.evaluate(() => { localStorage.clear(); });
+// il collaudo dà i valori nella riga di comando, come in AutoCAD: le finestre dei comandi si provano a parte, più avanti
+await page.evaluate(() => { localStorage.clear(); localStorage.setItem('planimetrie.dialogs', '0'); });
 await page.reload();
 await page.waitForFunction(() => window.app);
 
@@ -70,6 +71,13 @@ const prompt = () => page.evaluate(() => document.getElementById('prompt').textC
 
 check('pagina caricata senza errori', errors.length === 0, errors.join(' | '));
 check('riga di comando a riposo', (await prompt()) === 'Comando:');
+
+// i muri nascono con le misure interne; il resto del collaudo li disegna sull'asse, come sono scritte le sue coordinate
+await cmd('MURO');
+check('MURO: di partenza le misure sono quelle interne', (await prompt()).includes('misure interne'), await prompt());
+await cmd('G'); await cmd('C');
+check('MURO: Giustificazione Centro mette le misure sull\'asse', (await prompt()).includes('misure sull\'asse'), await prompt());
+await kb.press('Escape');
 
 // ---- muri chiusi
 await cmd('MURO');
@@ -520,7 +528,7 @@ await kb.press('Escape');
 const wallBefore = (await ents()).find(e => e.t === 'wall');
 await cmd('DS');
 await page.waitForSelector('.modal select');
-await page.selectOption('.modal select >> nth=0', 'm');
+await page.selectOption('.modal select[name="units"]', 'm');
 await page.click('.modal button.primary');
 await page.waitForTimeout(100);
 const afterM = await page.evaluate(() => ({ s: window.app.doc.settings, w: window.app.doc.ents.find(e => e.t === 'wall') }));
@@ -745,6 +753,156 @@ await clickWorld(11110, 275); // su un corso del retino, lontano dal contorno
 const hPanel = await page.evaluate(() => [...document.querySelectorAll('#props .prop')].map(p => p.querySelector('span')?.textContent).join('|'));
 check('pannello del tratteggio: retino, passo e angolo', /Pattern/.test(hPanel) && /Passo/.test(hPanel) && /Angolo/.test(hPanel) && (await page.evaluate(() => document.querySelectorAll('#props select option[value="brick"]').length)) === 1, hPanel);
 await kb.press('Escape');
+
+// ---- retini nuovi, muro con il retino, quota sul filo del muro
+const viewBefore = await page.evaluate(() => { const b = window.app.view.visibleBox(); return [b.x0, b.y0, b.x1, b.y1]; });
+await cmd('H'); await cmd('P');
+const patPrompt = await prompt();
+check('TRATTEGGIO: fra i retini ci sono spina di pesce, listoni, zig-zag e calcestruzzo', ['Spina di pesce', 'ListoniSfalsati', 'Zig-zag', 'Calcestruzzo', 'Doppie a 45'].every(s => patPrompt.includes(s)), patPrompt);
+await cmd('S');
+check('TRATTEGGIO: scelta la spina di pesce', (await prompt()).includes('Spina di pesce'), await prompt());
+await cmd('P'); await cmd('M'); await kb.press('Escape');
+await zoomTo(19900, -150, 20600, 450);
+await cmd('MURO'); await cmd('R');
+check('MURO: l\'opzione Riempimento propone Normale e i retini', (await prompt()).includes('Normale') && (await prompt()).includes('Mattoni'), await prompt());
+await cmd('45');
+check('MURO: il retino scelto compare nel prompt', (await prompt()).includes('Linee a 45°'), await prompt());
+await cmd('20000,0'); await cmd('20400,0'); await cmd('20400,300'); await cmd('');
+const wp = (await ents()).filter(e => e.t === 'wall').slice(-2);
+check('MURO con Riempimento: i muri nascono con il retino', wp.length === 2 && wp.every(w => w.pat === 'ansi31') && wp[0].a.x === 20000, JSON.stringify(wp));
+await cmd('MURO'); await cmd('R'); await cmd('N');
+check('MURO: Riempimento Normale toglie il retino', !(await prompt()).includes('Linee a 45°'), await prompt());
+// misure interne: i punti dati sono gli spigoli interni della stanza, in qualunque verso la si disegni
+await cmd('G');
+const justPrompt = await prompt();
+check('MURO: Giustificazione propone interne, esterne, asse e i due fili', ['Interne', 'Esterne', 'Centro', 'Sinistra', 'Destra'].every(x => justPrompt.includes(x)), justPrompt);
+await cmd('I');
+await cmd('21000,0'); await cmd('21300,0'); await cmd('21300,200'); await cmd('21000,200'); await cmd('C');
+const hI = wp[0].th / 2;
+const near2 = (p, x, y) => Math.abs(p.x - x) < 1e-6 && Math.abs(p.y - y) < 1e-6;
+const wIn = (await ents()).filter(e => e.t === 'wall').slice(-4);
+check('MURO con misure interne, in senso antiorario: lo spessore va all\'esterno', near2(wIn[0].a, 21000 - hI, -hI) && near2(wIn[0].b, 21300 + hI, -hI) && near2(wIn[2].a, 21300 + hI, 200 + hI), JSON.stringify(wIn.map(w => [w.a, w.b])));
+const innerOf = id => page.evaluate(id => { const i = window.app.doc.ctx().walls.walls.get(id); return [i.sl, i.el, i.sr, i.er]; }, id);
+const inn = await innerOf(wIn[0].id);
+check('MURO con misure interne: il filo interno misura quanto digitato (300)', inn.some(q => near2(q, 21000, 0)) && inn.some(q => near2(q, 21300, 0)), JSON.stringify(inn));
+await cmd('MURO'); await cmd('21000,-600'); await cmd('21000,-400'); await cmd('21300,-400'); await cmd('21300,-600'); await cmd('C');
+const wCw = (await ents()).filter(e => e.t === 'wall').slice(-4);
+check('MURO con misure interne, in senso orario: lo spessore va ancora all\'esterno', near2(wCw[0].a, 21000 - hI, -600 - hI) && near2(wCw[1].b, 21300 + hI, -400 + hI), JSON.stringify(wCw.map(w => [w.a, w.b])));
+// stanza chiusa tornando sul punto di partenza invece che con Chiudi: i quattro angoli sono giuntati lo stesso
+await cmd('MURO'); await cmd('21000,-1600'); await cmd('21200,-1600'); await cmd('21200,-1300'); await cmd('21000,-1300'); await cmd('21000,-1600');
+const wBack = (await ents()).filter(e => e.t === 'wall').slice(-4);
+const capsBack = await page.evaluate(ids => ids.map(id => { const i = window.app.doc.ctx().walls.walls.get(id); return i.capS || i.capE; }), wBack.map(w => w.id));
+check('MURO: tornando sul primo punto la stanza si chiude e il comando finisce', (await prompt()) === 'Comando:' && near2(wBack[0].a, 21000 - hI, -1600 - hI) && near2(wBack[3].b, 21000 - hI, -1600 - hI) && capsBack.every(c => !c), JSON.stringify([wBack.map(w => [w.a, w.b]), capsBack]));
+await cmd('MURO'); await cmd('G'); await cmd('E'); await cmd('21000,-1000'); await cmd('21300,-1000'); await cmd('21300,-800'); await cmd('');
+const wEx = (await ents()).filter(e => e.t === 'wall').slice(-2);
+check('MURO con misure esterne: lo spessore va all\'interno', near2(wEx[0].a, 21000, -1000 + hI) && near2(wEx[0].b, 21300 - hI, -1000 + hI), JSON.stringify(wEx.map(w => [w.a, w.b])));
+await cmd('MURO'); await cmd('G'); await cmd('C');
+await kb.press('Escape');
+const hw = wp[0].th / 2;
+await clickWorld(20200, hw);
+const wPanel = await page.evaluate(() => [...document.querySelectorAll('#props .prop')].map(p => (p.querySelector('span')?.textContent ?? '') + '=' + (p.querySelector('input,select')?.value ?? '')).join('|'));
+check('pannello del muro: riempimento e passo del retino', /Riempimento=ansi31/.test(wPanel) && /Passo retino=/.test(wPanel), wPanel);
+await kb.press('Escape');
+await cmd('QL'); await cmd('');
+await clickWorld(20200, hw); // il filo interno del muro in basso: l'altro muro sale da lì
+await cmd('20200,150');
+const dw = await lastEnt();
+check('QUOTA selezionando un muro, messa all\'interno: misura il filo interno, da spigolo a spigolo',
+  dw.t === 'dim' && Math.abs(dw.a.y - hw) < 1e-6 && Math.abs(dw.b.y - hw) < 1e-6 && Math.abs(Math.abs(dw.b.x - dw.a.x) - (400 - hw)) < 1e-6, JSON.stringify([dw.a, dw.b, hw]));
+await cmd('QL'); await cmd('');
+await clickWorld(20200, hw); // stesso clic sul filo interno, ma la quota va messa fuori
+await cmd('20200,-150');
+const dw2 = await lastEnt();
+check('QUOTA selezionando un muro, messa all\'esterno: misura il filo esterno', Math.abs(dw2.a.y + hw) < 1e-6 && Math.abs(Math.abs(dw2.b.x - dw2.a.x) - (400 + hw)) < 1e-6, JSON.stringify([dw2.a, dw2.b]));
+
+// ---- grip dei blocchi: con il punto base lontano c'è anche un grip al centro, e lo sposta
+await cmd('REC'); await cmd('20000,-500'); await cmd('@80,60');
+await zoomTo(19950, -550, 20250, -350);
+await clickWorld(20000, -470);
+await cmd('BLOCCO'); await cmd('lontano'); await cmd('19000,-500');
+await zoomTo(18900, -900, 20300, -100);
+const farIns = await lastEnt();
+const farGrips = await page.evaluate(async id => (await import('/src/model/entities.ts')).grips(window.app.doc.byId(id), window.app.doc.ctx()), farIns.id);
+check('blocco con il punto base lontano: grip sul punto base e al centro', farGrips.length === 2 && farGrips[0].x === 19000 && Math.abs(farGrips[1].x - 20040) < 1e-6 && Math.abs(farGrips[1].y + 470) < 1e-6, JSON.stringify(farGrips));
+await clickWorld(20040, -470);
+check('clic sul grip al centro del blocco: parte lo spostamento', (await prompt()).includes('STIRA'), await prompt());
+await cmd('20140,-470');
+const farMoved = await byId(farIns.id);
+check('il grip al centro sposta il blocco intero', Math.abs(farMoved.p.x - 19100) < 1e-6 && Math.abs(farMoved.p.y + 500) < 1e-6 && (await prompt()) === 'Comando:', JSON.stringify(farMoved.p));
+await kb.press('Escape');
+// un muro solo, con le misure interne: non c'è una stanza, il muro sta sull'asse dei punti dati
+await cmd('MURO'); await cmd('G'); await cmd('I'); await cmd('22000,0'); await cmd('22400,0'); await cmd('');
+const wOne = await lastEnt();
+check('MURO di un tratto solo con le misure interne: sull\'asse', wOne.t === 'wall' && wOne.a.y === 0 && wOne.b.y === 0, JSON.stringify(wOne));
+await cmd('MURO'); await cmd('G'); await cmd('C'); await kb.press('Escape');
+
+// ---- finestre dei comandi (accese, come per chi usa il programma)
+await cmd('IMPOSTAZIONI');
+check('Impostazioni: il modo di lavorare è la prima scelta, qui con la sola riga di comando', (await page.evaluate(() => document.querySelector('.modal select')?.getAttribute('name'))) === 'cmd-mode' && (await page.inputValue('.modal select[name="cmd-mode"]')) === 'cmdline');
+await page.selectOption('.modal select[name="cmd-mode"]', 'dialogs');
+await page.click('.modal-foot button:has-text("Salva")');
+check('Impostazioni: scelto "Con le finestre", vale', (await page.evaluate(() => localStorage.getItem('planimetrie.dialogs'))) === '1');
+const modalOpen = () => page.evaluate(() => !!document.querySelector('.modal'));
+const thBefore = await page.evaluate(() => window.app.doc.settings.wallTh);
+await cmd('MURO');
+check('MURO apre la finestra: spessore, misure e riempimento con i retini disegnati', (await modalOpen()) && (await page.locator('.modal .tile canvas').count()) === 14 && (await page.locator('.modal .seg button').count()) === 5, String(await page.locator('.modal .tile').count()));
+await page.fill('.modal input[name="th"]', '12');
+await page.click('.modal .tile[data-value="brick"]');
+await page.click('.modal .seg button[data-value="C"]');
+await kb.press('Enter');
+check('finestra del muro: OK e i valori valgono', !(await modalOpen()) && (await prompt()).includes('spessore 12') && (await prompt()).includes('Mattoni') && (await prompt()).includes('asse'), await prompt());
+await kb.press('Escape');
+await cmd('MURO');
+await page.fill('.modal input[name="th"]', 'abc');
+await kb.press('Enter');
+check('finestra del muro: un numero sbagliato la tiene aperta e lo segnala', (await modalOpen()) && /non valido/.test(await page.textContent('.modal')), await page.textContent('.modal small.err'));
+await kb.press('Escape');
+check('finestra del muro: Esc annulla il comando', !(await modalOpen()) && (await prompt()) === 'Comando:', await prompt());
+await cmd('MURO');
+await page.fill('.modal input[name="th"]', String(thBefore).replace('.', ','));
+await page.click('.modal .tile[data-value=""]');
+await kb.press('Enter'); await kb.press('Escape');
+await cmd('H');
+check('TRATTEGGIO apre la finestra con i retini disegnati', (await modalOpen()) && (await page.locator('.modal .tile').count()) === 13);
+await page.dblclick('.modal .tile[data-value="herring"]');
+check('TRATTEGGIO: doppio clic su un retino lo sceglie e chiude la finestra', !(await modalOpen()) && (await prompt()).includes('Spina di pesce'), await prompt());
+await kb.press('Escape');
+await cmd('I');
+const nBlocks = await page.evaluate(() => Object.keys(window.app.doc.blocks).length);
+check('INSERISCI apre la finestra con le miniature dei blocchi', (await modalOpen()) && (await page.locator('.modal .tile canvas').count()) === nBlocks && nBlocks > 0, String(nBlocks));
+await page.fill('.modal input[name="s"]', '2');
+await kb.press('Enter');
+check('INSERISCI: scala dalla finestra, poi si indica il punto', !(await modalOpen()) && (await prompt()).includes('scala 2'), await prompt());
+await kb.press('Escape');
+await cmd('L'); await cmd('23000,0'); await cmd('23100,0'); await cmd('');
+const rl = await lastEnt();
+await page.evaluate(id => window.app.setSelection([id]), rl.id);
+await cmd('RUOTA'); await cmd('23000,0');
+check('RUOTA: dato il punto base, l\'angolo nella finestra (con "Col mouse")', (await modalOpen()) && (await page.textContent('.modal')).includes('Col mouse'));
+await page.fill('.modal input[name="a"]', '90');
+await kb.press('Enter');
+const rl2 = await byId(rl.id);
+check('RUOTA con l\'angolo della finestra', Math.abs(rl2.b.x - 23000) < 1e-6 && Math.abs(rl2.b.y - 100) < 1e-6 && (await prompt()) === 'Comando:', JSON.stringify(rl2));
+await page.evaluate(id => window.app.setSelection([id]), rl.id);
+await cmd('SERIE');
+const visibleField = name => page.evaluate(n => { const i = document.querySelector(`.modal input[name="${n}"]`); return !!i && i.closest('.field').style.display !== 'none'; }, name);
+check('SERIE apre la finestra con i campi della serie rettangolare', (await visibleField('rows')) && !(await visibleField('n')));
+await page.click('.modal .seg button[data-value="P"]');
+check('SERIE: scegliendo Polare si vedono i suoi campi', !(await visibleField('rows')) && (await visibleField('n')));
+await page.fill('.modal input[name="n"]', '4');
+await kb.press('Enter');
+const nBeforeSerie = (await ents()).length;
+await cmd('23000,-200');
+check('SERIE polare dalla finestra: dato il centro, le copie ci sono', (await ents()).length === nBeforeSerie + 3 && (await prompt()) === 'Comando:', String((await ents()).length - nBeforeSerie));
+await page.evaluate(id => window.app.setSelection([id]), rl.id);
+await cmd('BLOCCO'); await cmd('sedia');
+check('BLOCCO con un nome che c\'è già: la domanda in una finestra con Sì e No', (await modalOpen()) && (await page.textContent('.modal')).includes('ridefinirlo'), await page.textContent('#prompt'));
+await page.click('.modal-foot button:has-text("No")');
+check('domanda in finestra: No torna alla richiesta del nome', !(await modalOpen()) && (await prompt()).includes('Nome del blocco'), await prompt());
+await kb.press('Escape');
+await page.evaluate(() => localStorage.setItem('planimetrie.dialogs', '0'));
+
+await zoomTo(...viewBefore);
 
 // ---- AREA con un clic dentro
 await cmd('L'); await cmd('11300,200'); await cmd('11500,200'); await cmd('11500,300'); await cmd('11300,300'); await cmd('C');
@@ -981,7 +1139,8 @@ await page.waitForSelector('.st-pop input[type=text]');
 await page.fill('.st-pop input[type=text]', '2,5');
 await kb.press('Enter');
 await page.waitForTimeout(40);
-check('menu SNAP (clic destro): passo dello snap cambiato e snap acceso', await page.evaluate(() => window.app.doc.settings.snap === 2.5 && window.app.snapSt.gridSnap) && !(await page.$('.st-pop')));
+check('menu SNAP (clic destro): passo dello snap cambiato e snap acceso', await page.evaluate(() => window.app.doc.settings.snap === 2.5 && window.app.snapSt.gridSnap) && !(await page.$('.st-pop')),
+  JSON.stringify(await page.evaluate(() => ({ passo: window.app.doc.settings.snap, unita: window.app.doc.settings.units, snap: window.app.snapSt.gridSnap, menuAperto: !!document.querySelector('.st-pop') }))));
 await cmd('L'); await clickWorld(30101.1, 30201.4); await clickWorld(30151.2, 30201.3); await cmd('');
 const snapped = await lastEnt();
 check('con lo snap acceso i punti cadono sui multipli del passo', snapped.t === 'line' && [snapped.a.x, snapped.a.y, snapped.b.x, snapped.b.y].every(n => Math.abs(n / 2.5 - Math.round(n / 2.5)) < 1e-9), JSON.stringify(snapped));

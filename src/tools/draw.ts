@@ -1,6 +1,6 @@
 // Comandi di disegno.
-import type { Ent, NewEnt, HAlign, HatchPattern } from '../model/entities';
-import { HATCH_NAMES, retext } from '../model/entities';
+import type { Ent, NewEnt, HAlign, HatchPattern, Prim } from '../model/entities';
+import { HATCH_NAMES, retext, prims } from '../model/entities';
 import { arc3 } from '../model/entities';
 import { closedLoopAt, islandsIn } from '../model/ops';
 import { findRegion } from '../model/region';
@@ -461,9 +461,31 @@ export class TextTool extends Tool {
   private rot = 0;
   private step: 'p' | 'h' | 'r' | 'txt' | 'just' = 'p';
   private typed = '';
+  /** altezza e rotazione già date nella finestra: dopo il punto si scrive subito */
+  private fromForm = false;
 
   start() {
-    this.hgt = this.h.doc.settings.textH;
+    const s = this.h.doc.settings;
+    this.hgt = s.textH;
+    this.withForm({
+      title: 'Testo',
+      fields: [
+        { k: 'num', key: 'h', label: 'Altezza', unit: s.units, value: s.textH },
+        { k: 'num', key: 'rot', label: 'Rotazione', unit: '°', value: 0, free: true },
+        { k: 'choice', key: 'ha', label: 'Allineamento', value: TextTool.ha, options: [['l', 'Sinistra'], ['c', 'Centro'], ['r', 'Destra']] },
+      ],
+    }, v => {
+      if (v) {
+        this.hgt = s.textH = v.h as number;
+        this.rot = ((v.rot as number) * Math.PI) / 180;
+        TextTool.ha = v.ha as HAlign;
+        this.fromForm = true;
+      }
+      this.askPoint();
+    });
+  }
+
+  private askPoint() {
     this.step = 'p';
     this.ask('Specificare punto di inserimento o', [O('G', 'Giustificazione')]);
   }
@@ -471,14 +493,15 @@ export class TextTool extends Tool {
   option(k: string) {
     if (this.step === 'just') {
       TextTool.ha = k === 'C' ? 'c' : k === 'D' ? 'r' : 'l';
-      this.start();
+      this.askPoint();
       return;
     }
     if (k === 'G') { this.step = 'just'; this.ask('Giustificazione', [O('S', 'Sinistra'), O('C', 'Centro'), O('D', 'Destra')], undefined, 'none'); }
   }
 
   point(p: Vec) {
-    if (this.step === 'p') {
+    if (this.step === 'p' && this.fromForm) { this.p = p; this.askText(); }
+    else if (this.step === 'p') {
       this.p = p; this.base = p; this.step = 'h'; this.numberAsText = true;
       this.ask('Specificare altezza', [], fmtLen(this.hgt));
     } else if (this.step === 'h' && this.p) {
@@ -538,7 +561,7 @@ export class TextTool extends Tool {
     if (this.step === 'txt' && this.p) {
       return [this.make(this.p, this.typed || '|')];
     }
-    if (this.step === 'p') return [{ t: 'text', p, s: 'Testo', h: this.hgt, rot: 0, ha: TextTool.ha, va: 'b', layer: L }];
+    if (this.step === 'p') return [{ t: 'text', p, s: 'Testo', h: this.hgt, rot: this.fromForm ? this.rot : 0, ha: TextTool.ha, va: 'b', layer: L }];
     return [];
   }
 }
@@ -546,14 +569,26 @@ export class TextTool extends Tool {
 // ---------------------------------------------------------------- TRATTEGGIO
 
 /** Retini: sigla per sceglierli dall'opzione Pattern, nome mostrato. */
-const PAT_OPTS: [string, string, HatchPattern][] = [
-  ['PI', 'PIeno', 'solid'], ['45', '45 gradi', 'ansi31'], ['X', 'incrociato (X)', 'ansi37'], ['LI', 'LInee', 'lines'],
-  ['Q', 'Quadretti', 'grid'], ['M', 'Mattoni', 'brick'], ['T', 'Tratteggiate', 'dash'], ['PU', 'PUntinato', 'dots'],
+export const PAT_OPTS: [string, string, HatchPattern][] = [
+  ['PI', 'PIeno', 'solid'], ['45', '45 gradi', 'ansi31'], ['D', 'Doppie a 45 (muratura)', 'ansi32'], ['X', 'incrociato (X)', 'ansi37'], ['LI', 'LInee', 'lines'],
+  ['Q', 'Quadretti', 'grid'], ['M', 'Mattoni', 'brick'], ['LS', 'ListoniSfalsati', 'plank'], ['S', 'Spina di pesce', 'herring'],
+  ['T', 'Tratteggiate', 'dash'], ['PU', 'PUntinato', 'dots'], ['Z', 'Zig-zag (isolante)', 'zigzag'], ['C', 'Calcestruzzo', 'concrete'],
 ];
 const PATTERNS: Record<string, HatchPattern> = {
-  SOLIDO: 'solid', SOLID: 'solid', PIENO: 'solid', ANSI31: 'ansi31', ANSI37: 'ansi37', LINEE: 'lines', QUADRETTI: 'grid',
-  PIASTRELLE: 'grid', MATTONI: 'brick', TRATTEGGIATE: 'dash', PUNTINATO: 'dots',
+  SOLIDO: 'solid', SOLID: 'solid', PIENO: 'solid', ANSI31: 'ansi31', ANSI32: 'ansi32', MURATURA: 'ansi32', ANSI37: 'ansi37', LINEE: 'lines', QUADRETTI: 'grid',
+  PIASTRELLE: 'grid', MATTONI: 'brick', LISTONI: 'plank', PARQUET: 'plank', SPINA: 'herring', SPINADIPESCE: 'herring', TRATTEGGIATE: 'dash', PUNTINATO: 'dots',
+  ZIGZAG: 'zigzag', ISOLANTE: 'zigzag', CALCESTRUZZO: 'concrete', CLS: 'concrete',
 };
+
+const TILE_SQ = [v(0, 0), v(100, 0), v(100, 75), v(0, 75)];
+
+/** Riquadri con il disegno di ogni retino, per sceglierli in una finestra; normal = anche il riempimento normale dei muri. */
+export function patternTiles(normal = false): { value: string; label: string; prims: Prim[] }[] {
+  const frame: Prim = { k: 'pl', pts: TILE_SQ, closed: true };
+  const out = PAT_OPTS.map(([, , pat]) => ({ value: pat as string, label: HATCH_NAMES[pat], prims: [frame, ...prims({ id: 0, layer: '0', t: 'hatch', loops: [TILE_SQ], pat, sp: 10, ang: 0 })] }));
+  if (normal) out.unshift({ value: '', label: 'Normale (pieno)', prims: [{ k: 'pl', pts: TILE_SQ, closed: true, fill: 'wall' }] });
+  return out;
+}
 
 export class HatchTool extends Tool {
   readonly name = 'TRATTEGGIO';
@@ -562,7 +597,25 @@ export class HatchTool extends Tool {
   private sub: '' | 'pat' | 'sp' | 'ang' | 'obj' = '';
   private made = 0;
 
-  start() {
+  start() { this.settings(); }
+
+  /** Retino, passo e angolo nella finestra (con le finestre accese), poi la richiesta del punto interno. */
+  private settings() {
+    const s = this.h.doc.settings;
+    this.withForm({
+      title: 'Tratteggio',
+      fields: [
+        { k: 'tiles', key: 'pat', label: 'Retino', value: HatchTool.pat, tiles: patternTiles() },
+        { k: 'num', key: 'sp', label: 'Passo (più grande = retino più largo)', unit: s.units, value: s.hatchSp },
+        { k: 'num', key: 'ang', label: 'Angolo', unit: '°', value: Math.round(((HatchTool.ang * 180) / Math.PI) * 1000) / 1000, free: true },
+      ],
+    }, v => {
+      if (v) { HatchTool.pat = v.pat as HatchPattern; s.hatchSp = v.sp as number; HatchTool.ang = ((v.ang as number) * Math.PI) / 180; }
+      this.prompt();
+    });
+  }
+
+  private prompt() {
     this.sub = '';
     const name = HATCH_NAMES[HatchTool.pat];
     this.ask(`Specificare punto interno (${name}, passo ${fmtLen(this.h.doc.settings.hatchSp)}) o`, [O('S', 'Selezionare oggetto'), O('P', 'Pattern'), O('PA', 'PAsso'), O('AN', 'ANgolo')]);
@@ -571,20 +624,21 @@ export class HatchTool extends Tool {
   option(k: string) {
     if (this.sub === 'pat') {
       HatchTool.pat = PAT_OPTS.find(o => o[0] === k)?.[2] ?? HatchTool.pat;
-      this.start();
+      this.prompt();
       return;
     }
     if (k === 'S') { this.sub = 'obj'; this.ask('Selezionare polilinea chiusa, cerchio o locale', [], undefined, 'entity'); }
+    else if (k === 'P' && this.h.dialogs) this.settings();
     else if (k === 'P') { this.sub = 'pat'; this.ask('Retino', PAT_OPTS.map(o => O(o[0], o[1])), undefined, 'none'); }
     else if (k === 'PA') { this.sub = 'sp'; this.numberAsText = true; this.ask('Passo del retino (più grande = retino più largo)', [], fmtLen(this.h.doc.settings.hatchSp)); }
     else if (k === 'AN') { this.sub = 'ang'; this.numberAsText = true; this.ask('Angolo aggiuntivo del pattern', [], fmtLen((HatchTool.ang * 180) / Math.PI)); }
   }
 
   text(s: string): boolean {
-    if (this.sub === 'sp') { const n = parseNum(s); if (n === null || n <= 0) return false; this.h.doc.settings.hatchSp = n; this.numberAsText = false; this.start(); return true; }
-    if (this.sub === 'ang') { const a = parseAngle(s); if (a === null) return false; HatchTool.ang = a; this.numberAsText = false; this.start(); return true; }
+    if (this.sub === 'sp') { const n = parseNum(s); if (n === null || n <= 0) return false; this.h.doc.settings.hatchSp = n; this.numberAsText = false; this.prompt(); return true; }
+    if (this.sub === 'ang') { const a = parseAngle(s); if (a === null) return false; HatchTool.ang = a; this.numberAsText = false; this.prompt(); return true; }
     const p = PATTERNS[s.trim().toUpperCase()];
-    if (p) { HatchTool.pat = p; this.start(); return true; }
+    if (p) { HatchTool.pat = p; this.prompt(); return true; }
     return false;
   }
 
@@ -606,7 +660,7 @@ export class HatchTool extends Tool {
     if (region && (!loop || Math.abs(areaOf(region)) < Math.abs(areaOf(loop)))) { loop = region; islands = []; }
     if (!loop) { this.h.msg('Nessun contorno chiuso attorno al punto.'); return; }
     this.create([loop, ...islands]);
-    this.start();
+    this.prompt();
   }
 
   entity(e: Ent) {
@@ -616,11 +670,11 @@ export class HatchTool extends Tool {
     else if (e.t === 'circle') loop = tessArc(e.c, e.r, 0, TAU).slice(0, -1);
     if (!loop) { this.h.msg('Serve un contorno chiuso.'); return; }
     this.create([loop]);
-    this.start();
+    this.prompt();
   }
 
   enter() {
-    if (this.sub) { this.numberAsText = false; this.start(); return; }
+    if (this.sub) { this.numberAsText = false; this.prompt(); return; }
     this.h.done();
   }
 }
