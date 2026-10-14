@@ -1,6 +1,6 @@
 # Kalista — stato del lavoro (13 ottobre 2026)
 
-Kalista (prima si chiamava Planimetrie): programma di disegno 2D per planimetrie, sul modello di DraftSight: stessi comandi, alias e tasti.
+Kalista (prima si chiamava Planimetrie): programma di disegno 2D per planimetrie, con comandi, sigle e tasti compatibili con quelli di DraftSight® e AutoCAD®. È un progetto indipendente, scritto da zero: i nomi di quei programmi (marchi dei rispettivi proprietari) servono solo a dire con cosa è compatibile.
 Web app (TypeScript + Vite), gira nel browser.
 
 ## Avvio
@@ -8,7 +8,7 @@ Web app (TypeScript + Vite), gira nel browser.
 ```
 npm install
 npm run dev        # apre su http://localhost:5173
-npm test           # test unitari (168)
+npm test           # test unitari (169)
 npm run e2e        # collaudo in Chrome: digita i comandi come un utente
 npm run chiavetta  # prepara la versione da chiavetta in chiavetta/Kalista
 npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e in Edge
@@ -151,9 +151,11 @@ Restano (segnalati dalla revisione, non corretti):
   passando da una parte all'altra). Quotando per punti, dove due muri fanno angolo lo snap preferisce
   gli spigoli che si vedono alla fine dell'asse, che lì è nascosta dentro lo spessore (l'asse si
   aggancia ancora andandoci sopra).
-- **Retini**: in più doppie linee a 45° (muratura), listoni sfalsati, spina di pesce (con angolo 45°
-  viene dritta), zig-zag (isolante), calcestruzzo. Le famiglie di righe ora si descrivono come nei
-  file .pat dei CAD (`HATCH_FAMS` in `src/model/entities.ts`): aggiungerne uno è una riga.
+- **Retini**: in più doppie linee a 45° (muratura), listoni sfalsati, spina di pesce, zig-zag
+  (isolante), calcestruzzo. I retini a righe sono famiglie di righe parallele con tratti e
+  sfalsamenti (`HATCH_FAMS` in `src/model/entities.ts`); la spina di pesce è una griglia di listelli
+  4 × 1 (`HATCH_TILES`), con un test che controlla che coprano il piano senza buchi né
+  sovrapposizioni. Tutti i retini sono disegnati da noi, senza riprendere le definizioni di altri programmi.
 - **Muri con il retino** (per esempio il muretto tecnico): MURO, opzione Riempimento, oppure
   "Riempimento" e "Passo retino" nel pannello Proprietà di un muro già fatto; il pennello (MA) li
   copia. Il muro si disegna e si stampa a righe al posto del riempimento pieno; passo predefinito un

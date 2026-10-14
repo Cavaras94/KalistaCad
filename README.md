@@ -2,7 +2,7 @@
 
 **Kalista** è un programma libero per disegnare planimetrie 2D: muri, porte, finestre, locali con la superficie, quote, retini, blocchi, stampa in scala e PDF. Si usa nel browser e non serve installarlo: c'è anche una versione da chiavetta, che si apre con un doppio clic e funziona senza Internet.
 
-I comandi, gli alias e i tasti sono quelli di DraftSight e AutoCAD (L, PL, REC, M, CO, TR, OFFSET, F3, F8…), con i nomi anche in italiano (LINEA, MURO, PORTA, QUOTA…). Chi preferisce le finestre di dialogo può usarle; chi è abituato alla riga di comando può spegnerle in Impostazioni.
+I comandi, le sigle e i tasti sono compatibili con quelli dei CAD più diffusi, come AutoCAD® e DraftSight® (L, PL, REC, M, CO, TR, OFFSET, F3, F8…), con i nomi anche in italiano (LINEA, MURO, PORTA, QUOTA…): chi li conosce si trova subito a casa. Chi preferisce le finestre di dialogo può usarle; chi è abituato alla riga di comando può spegnerle in Impostazioni.
 
 ## Usarlo subito
 
@@ -78,4 +78,4 @@ Kalista è software libero: lo si può usare, studiare, modificare e ridistribui
 
 Il programma è distribuito sperando che sia utile, ma **senza alcuna garanzia**.
 
-Usa [LibreDWG](https://www.gnu.org/software/libredwg/) (GPL-3.0, tramite `@mlightcad/libredwg-web`) per leggere i file DWG e [dxf-parser](https://github.com/gdsestimating/dxf-parser) (MIT) per i DXF. AutoCAD e DraftSight sono marchi dei rispettivi proprietari: Kalista non ha legami con loro, ne riprende soltanto i comandi.
+Usa [LibreDWG](https://www.gnu.org/software/libredwg/) (GPL-3.0, tramite `@mlightcad/libredwg-web`) per leggere i file DWG e [dxf-parser](https://github.com/gdsestimating/dxf-parser) (MIT) per i DXF. AutoCAD è un marchio registrato di Autodesk, Inc.; DraftSight è un marchio registrato di Dassault Systèmes. Sono citati solo per indicare la compatibilità dei comandi e dei file: Kalista è un progetto indipendente, scritto da zero, senza legami con queste aziende e senza alcun loro codice, logo o approvazione.

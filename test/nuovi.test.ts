@@ -435,7 +435,7 @@ describe('tipo di linea e spessore per singola entità', () => {
 // ---------------------------------------------------------------- richieste della mail: raccordo, retini, immagini
 import { cornerPoly, filletPolyAll } from '../src/model/ops';
 import type { HatchE, ImageE } from '../src/model/entities';
-import { imageCorners, HATCH_NAMES } from '../src/model/entities';
+import { imageCorners, HATCH_NAMES, HATCH_TILES } from '../src/model/entities';
 import { polygonArea } from '../src/model/geom';
 
 describe('raccordo e smusso sugli spigoli di una polilinea', () => {
@@ -521,7 +521,7 @@ describe('retini', () => {
   });
   it('un retino a tratti su un\'area enorme non genera milioni di trattini', () => {
     const big = [v(0, 0), v(6000, 0), v(6000, 6000), v(0, 6000)];
-    for (const pat of ['dots', 'brick', 'dash'] as const) {
+    for (const pat of ['dots', 'brick', 'dash', 'herring'] as const) {
       expect(prims({ id: 1, layer: '0', t: 'hatch', loops: [big], pat, sp: 2, ang: 0 }).length).toBeLessThan(100000);
     }
   });
@@ -666,13 +666,28 @@ describe('retini nuovi', () => {
     expect(Math.abs(lines('ansi32').length - 2 * lines('ansi31').length)).toBeLessThanOrEqual(2);
     expect(dirs(lines('ansi32'))).toEqual([45]);
   });
-  it('spina di pesce: elementi lunghi tre passi nei due versi a 45°; ruotata di 45° viene dritta', () => {
+  it('spina di pesce: lati di listelli lunghi quattro passi e larghi uno, nei due versi a 45°; girata di 45° ha i lati dritti', () => {
     const ps = lines('herring');
     expect(dirs(ps)).toEqual([45, 135]);
     const inner = ps.filter(inside);
     expect(inner.length).toBeGreaterThan(20);
-    for (const p of inner) close(dist(p.pts[0], p.pts[1]), 30);
+    for (const p of inner) expect([10, 40].some(L => Math.abs(dist(p.pts[0], p.pts[1]) - L) < 1e-6)).toBe(true);
     expect(dirs(lines('herring', Math.PI / 4))).toEqual([0, 90]);
+  });
+  it('spina di pesce: i listelli coprono il piano senza buchi e senza sovrapporsi', () => {
+    const t = HATCH_TILES.herring!;
+    // ogni punto (preso a caso, lontano dai bordi dei listelli) sta in un solo listello della griglia
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 40 - 20;
+    for (let n = 0; n < 400; n++) {
+      const x = rnd() + 1e-3, y = rnd() + 2e-3;
+      let hits = 0;
+      for (let p = -30; p <= 30; p++) for (let q = -30; q <= 30; q++) {
+        const ox = p * t.a[0] + q * t.b[0], oy = p * t.a[1] + q * t.b[1];
+        for (const [x0, y0, x1, y1] of t.rects) if (x > ox + x0 && x < ox + x1 && y > oy + y0 && y < oy + y1) hits++;
+      }
+      expect(hits).toBe(1);
+    }
   });
   it('listoni: giunti verticali alti un corso, a sei passi l\'uno dall\'altro e sfalsati fra corsi vicini', () => {
     const joints = lines('plank').filter(p => Math.abs(p.pts[0].x - p.pts[1].x) < 1e-9);

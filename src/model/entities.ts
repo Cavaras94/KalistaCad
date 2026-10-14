@@ -383,7 +383,7 @@ function roomPrims(e: RoomE, ctx: PrimCtx): Prim[] {
 const MAX_HATCH_LINES = 4000;
 
 /**
- * Una famiglia di righe parallele di un retino, come nei file .pat dei CAD, in multipli del passo:
+ * Una famiglia di righe parallele di un retino, in multipli del passo:
  * ang = inclinazione; o = punto per cui passa la prima riga e da cui parte il suo tratteggio (assente
  * = l'origine); dy = distanza fra le righe (assente = 1); dx = di quanto scorre il tratteggio da una
  * riga alla successiva; dash = [tratto, vuoto] (assente = riga continua).
@@ -391,7 +391,7 @@ const MAX_HATCH_LINES = 4000;
 const MAX_HATCH_DASHES = 60000;
 interface HatchFam { ang: number; o?: [number, number]; dy?: number; dx?: number; dash?: [number, number] }
 const Q = Math.PI / 4, R2 = Math.SQRT2;
-const HATCH_FAMS: Record<Exclude<HatchPattern, 'solid'>, HatchFam[]> = {
+const HATCH_FAMS: Record<Exclude<HatchPattern, 'solid' | 'herring'>, HatchFam[]> = {
   ansi31: [{ ang: Q }],
   // coppie di righe: la seconda a un terzo del passo dalla prima
   ansi32: [{ ang: Q }, { ang: Q, o: [R2 / 3, 0] }],
@@ -402,8 +402,6 @@ const HATCH_FAMS: Record<Exclude<HatchPattern, 'solid'>, HatchFam[]> = {
   brick: [{ ang: 0 }, { ang: Math.PI / 2, dash: [1, 1], dx: 1 }],
   // listoni lunghi sei passi e alti uno, sfalsati di un terzo da un corso all'altro
   plank: [{ ang: 0 }, { ang: Math.PI / 2, dy: 2, dash: [1, 2], dx: 1 }],
-  // elementi lunghi tre passi e larghi uno, a 45°; con l'angolo a 45° la spina viene dritta
-  herring: [{ ang: Q, dash: [3, 1], dx: 1 }, { ang: 3 * Q, o: [R2 / 2, R2 / 2], dash: [3, 1], dx: -1 }],
   dash: [{ ang: Q, dash: [1.5, 0.75] }],
   dots: [{ ang: 0, dash: [0.12, 0.88], dx: 0.5 }],
   // file di denti alti un passo, con un passo vuoto fra una fila e l'altra
@@ -412,13 +410,76 @@ const HATCH_FAMS: Record<Exclude<HatchPattern, 'solid'>, HatchFam[]> = {
   concrete: [{ ang: 0, dash: [0.08, 1.12], dx: 0.37 }, { ang: 1, dy: 1.3, dash: [0.3, 2.3], dx: 0.71 }, { ang: -0.7, dy: 1.7, dash: [0.25, 2.9], dx: 1.13 }],
 };
 
+/**
+ * Retino fatto di piastrelle rettangolari che si ripetono su una griglia: base = rotazione del
+ * disegno del retino; a e b = i due passi della griglia; rects = le piastrelle di una cella
+ * ([x0, y0, x1, y1]). Tutto in multipli del passo del retino.
+ */
+export interface HatchTiles { base: number; a: [number, number]; b: [number, number]; rects: [number, number, number, number][] }
+export const HATCH_TILES: Partial<Record<HatchPattern, HatchTiles>> = {
+  // Spina di pesce: listelli lunghi quattro e larghi uno, uno coricato e uno in piedi accanto alla
+  // sua testa; la coppia si ripete un passo più in alto e più a destra (a), e la scala così fatta
+  // si ripete spostata di quattro in basso e quattro a destra (b). Girata di 45°: le V della spina.
+  herring: { base: Q, a: [1, 1], b: [4, -4], rects: [[0, 0, 4, 1], [4, -3, 5, 1]] },
+};
+const MAX_TILE_CELLS = 8000;
+
+function tilePrims(e: Pick<HatchE, 'sp' | 'ang'>, loops: Vec[][], t: HatchTiles): Prim[] {
+  const rot = e.ang + t.base, co = Math.cos(rot), si = Math.sin(rot);
+  let sp = Math.max(e.sp, 1e-9);
+  // dal sistema del retino al disegno e ritorno
+  const W = (x: number, y: number): Vec => v((x * co - y * si) * sp, (x * si + y * co) * sp);
+  const pts = loops.flat();
+  const det = t.a[0] * t.b[1] - t.a[1] * t.b[0];
+  // celle della griglia che toccano l'area: si passa alle coordinate della griglia
+  const cellRange = () => {
+    let p0 = Infinity, p1 = -Infinity, q0 = Infinity, q1 = -Infinity;
+    for (const w of pts) {
+      const x = (w.x * co + w.y * si) / sp, y = (-w.x * si + w.y * co) / sp;
+      const p = (x * t.b[1] - y * t.b[0]) / det, q = (t.a[0] * y - t.a[1] * x) / det;
+      p0 = Math.min(p0, p); p1 = Math.max(p1, p); q0 = Math.min(q0, q); q1 = Math.max(q1, q);
+    }
+    // una cella sporge dalla sua origine: qualche cella in più per lato
+    return { p0: Math.floor(p0) - 6, p1: Math.ceil(p1) + 6, q0: Math.floor(q0) - 2, q1: Math.ceil(q1) + 2 };
+  };
+  let r = cellRange();
+  // un'area enorme rispetto al passo: piastrelle più grandi, come per le righe dei retini
+  while ((r.p1 - r.p0 + 1) * (r.q1 - r.q0 + 1) > MAX_TILE_CELLS) { sp *= 2; r = cellRange(); }
+  const out: Prim[] = [];
+  const seen = new Set<string>();
+  const key = (a: Vec, b: Vec) => [a, b].map(q => `${Math.round(q.x * 1e6)},${Math.round(q.y * 1e6)}`).sort().join('|');
+  for (let p = r.p0; p <= r.p1; p++) {
+    for (let q = r.q0; q <= r.q1; q++) {
+      const ox = p * t.a[0] + q * t.b[0], oy = p * t.a[1] + q * t.b[1];
+      for (const [x0, y0, x1, y1] of t.rects) {
+        const c = [W(ox + x0, oy + y0), W(ox + x1, oy + y0), W(ox + x1, oy + y1), W(ox + x0, oy + y1)];
+        for (let i = 0; i < 4; i++) {
+          const a = c[i], b = c[(i + 1) % 4];
+          const k = key(a, b);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          // il lato della piastrella, solo per la parte dentro il contorno
+          const L = dist(a, b), d = mul(sub(b, a), 1 / L);
+          for (const [s0, s1] of clipLineToLoops(a, d, loops)) {
+            const t0 = Math.max(0, dot(sub(s0, a), d)), t1 = Math.min(L, dot(sub(s1, a), d));
+            if (t1 - t0 > 1e-9) out.push({ k: 'pl', pts: [add(a, mul(d, t0)), add(a, mul(d, t1))] });
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
 function hatchPrims(e: Pick<HatchE, 'loops' | 'pat' | 'sp' | 'ang'>): Prim[] {
   const loops = e.loops.filter(l => l.length >= 3);
   if (!loops.length) return [];
   if (e.pat === 'solid') return [{ k: 'area', loops, fill: 'solid' }];
+  const tiles = HATCH_TILES[e.pat];
+  if (tiles) return tilePrims(e, loops, tiles);
   const out: Prim[] = [];
   const pts = loops.flat();
-  for (const fam of HATCH_FAMS[e.pat] ?? HATCH_FAMS.ansi31) {
+  for (const fam of HATCH_FAMS[e.pat as keyof typeof HATCH_FAMS] ?? HATCH_FAMS.ansi31) {
     const d = dirOf(e.ang + fam.ang), n = perp(d);
     let lo = Infinity, hi = -Infinity;
     for (const p of pts) {

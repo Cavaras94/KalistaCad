@@ -1,7 +1,7 @@
 {
   "name": "Kalista – disegno di planimetrie",
   "short_name": "Kalista",
-  "description": "Programma libero per disegnare planimetrie 2D, con i comandi di DraftSight e AutoCAD.",
+  "description": "Programma libero per disegnare planimetrie 2D, con comandi compatibili con quelli dei CAD più diffusi.",
   "lang": "it",
   "id": "./",
   "start_url": "./",
