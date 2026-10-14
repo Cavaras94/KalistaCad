@@ -836,6 +836,23 @@ const wOne = await lastEnt();
 check('MURO di un tratto solo con le misure interne: sull\'asse', wOne.t === 'wall' && wOne.a.y === 0 && wOne.b.y === 0, JSON.stringify(wOne));
 await cmd('MURO'); await cmd('G'); await cmd('C'); await kb.press('Escape');
 
+// ---- il punto base si aggancia agli angoli dell'oggetto stesso che si sposta
+await zoomTo(23900, -100, 24300, 200);
+await cmd('REC'); await cmd('24000,0'); await cmd('@100,50');
+const recB = await lastEnt();
+await page.evaluate(id => window.app.setSelection([id]), recB.id);
+await cmd('SPOSTA');
+await clickWorld(24001.5, 1.2); // vicino all'angolo, non sopra
+await cmd('24200,0');
+const recB2 = await byId(recB.id);
+check('SPOSTA: il punto base si aggancia all\'angolo dell\'oggetto selezionato', recB2.pts.some(q => q.x === 24200 && q.y === 0), JSON.stringify(recB2.pts));
+await page.evaluate(id => window.app.setSelection([id]), recB.id);
+await cmd('RUOTA');
+await clickWorld(24201, 0.9);
+await cmd('90');
+const recB3 = await byId(recB.id);
+check('RUOTA: il centro si aggancia all\'angolo dell\'oggetto selezionato, che resta fermo', recB3.pts.some(q => Math.abs(q.x - 24200) < 1e-6 && Math.abs(q.y) < 1e-6) && recB3.pts.some(q => Math.abs(q.x - 24200) < 1e-6 && Math.abs(q.y - 100) < 1e-6), JSON.stringify(recB3.pts));
+
 // ---- finestre dei comandi (accese, come per chi usa il programma)
 await cmd('IMPOSTAZIONI');
 check('Impostazioni: il modo di lavorare è la prima scelta, qui con la sola riga di comando', (await page.evaluate(() => document.querySelector('.modal select')?.getAttribute('name'))) === 'cmd-mode' && (await page.inputValue('.modal select[name="cmd-mode"]')) === 'cmdline');

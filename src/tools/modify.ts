@@ -26,16 +26,15 @@ export class EraseTool extends SelTool {
 
 abstract class BaseToSecond extends SelTool {
   protected from: Vec | null = null;
-  afterSelect() {
-    this.snapExclude = this.selIds;
-    this.ask('Specificare punto base o', [O('S', 'Spostamento')]);
-  }
+  // il punto base si aggancia anche agli oggetti selezionati (un loro angolo, per esempio); dopo,
+  // mentre seguono il mouse, gli snap li ignorano
+  afterSelect() { this.ask('Specificare punto base o', [O('S', 'Spostamento')]); }
   option(k: string) {
     // lo spostamento parte da 0,0: anche @dx,dy va contato da lì e non dall'ultimo punto disegnato
     if (k === 'S') { this.from = { x: 0, y: 0 }; this.h.lastPoint = { x: 0, y: 0 }; this.ask('Specificare spostamento come @dx,dy o dx,dy'); }
   }
   point(p: Vec) {
-    if (!this.from) { this.from = p; this.base = p; this.ask(this.secondPrompt()); return; }
+    if (!this.from) { this.from = p; this.base = p; this.snapExclude = this.selIds; this.ask(this.secondPrompt()); return; }
     this.apply(translate(p.x - this.from.x, p.y - this.from.y));
   }
   protected secondPrompt() { return 'Specificare secondo punto'; }
@@ -76,7 +75,7 @@ export class RotateTool extends SelTool {
   private copy = false;
   private ref: { step: 'a1' | 'a2' | 'new'; p1?: Vec; ang?: number } | null = null;
 
-  afterSelect() { this.snapExclude = this.selIds; this.ask('Specificare punto base'); }
+  afterSelect() { this.ask('Specificare punto base'); }
 
   private askAngle() {
     this.numberAsText = true;
@@ -103,7 +102,7 @@ export class RotateTool extends SelTool {
   }
 
   point(p: Vec) {
-    if (!this.c) { this.c = p; this.base = p; this.angleForm(); return; }
+    if (!this.c) { this.c = p; this.base = p; this.snapExclude = this.selIds; this.angleForm(); return; }
     if (this.ref) {
       if (this.ref.step === 'a1') { this.ref = { step: 'a2', p1: p }; this.base = p; this.ask('Specificare secondo punto'); return; }
       if (this.ref.step === 'a2') { this.ref = { step: 'new', ang: angleOf(this.ref.p1!, p) }; this.base = this.c; this.ask('Specificare nuovo angolo'); return; }
@@ -160,10 +159,10 @@ export class MirrorTool extends SelTool {
   private p1: Vec | null = null;
   private p2: Vec | null = null;
 
-  afterSelect() { this.snapExclude = this.selIds; this.ask('Specificare primo punto dell\'asse di specchio'); }
+  afterSelect() { this.ask('Specificare primo punto dell\'asse di specchio'); }
 
   point(p: Vec) {
-    if (!this.p1) { this.p1 = p; this.base = p; this.ask('Specificare secondo punto dell\'asse di specchio'); return; }
+    if (!this.p1) { this.p1 = p; this.base = p; this.snapExclude = this.selIds; this.ask('Specificare secondo punto dell\'asse di specchio'); return; }
     if (!this.p2) {
       if (dist(this.p1, p) < 1e-12) return;
       this.p2 = p; this.base = null;
@@ -198,7 +197,7 @@ export class ScaleTool extends SelTool {
   private refStep: 0 | 1 | 2 | 3 = 0; // 1: primo punto, 2: secondo punto, 3: nuova lunghezza
   private refP1: Vec | null = null;
 
-  afterSelect() { this.snapExclude = this.selIds; this.ask('Specificare punto base'); }
+  afterSelect() { this.ask('Specificare punto base'); }
 
   private askFactor() { this.numberAsText = true; this.ask('Specificare fattore di scala o', [O('R', 'Riferimento')]); }
 
@@ -218,7 +217,7 @@ export class ScaleTool extends SelTool {
   }
 
   point(p: Vec) {
-    if (!this.c) { this.c = p; this.base = p; this.factorForm(); return; }
+    if (!this.c) { this.c = p; this.base = p; this.snapExclude = this.selIds; this.factorForm(); return; }
     if (this.refStep === 1) { this.refP1 = p; this.base = p; this.refStep = 2; this.ask('Specificare secondo punto'); return; }
     if (this.refStep === 2) { this.refLen = dist(this.refP1!, p); this.refStep = 3; this.base = this.c; this.ask('Specificare nuova lunghezza'); return; }
     const d = dist(this.c, p);

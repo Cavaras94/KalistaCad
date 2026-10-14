@@ -44,7 +44,7 @@ npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e i
 - Stampa: A4–A0, scala 1:1…1:5000 o adatta, cartiglio, spessori in mm, PDF dal browser.
   Verificata la scala esatta (500 cm a 1:100 = 50 mm) e il formato del PDF.
 
-Collaudo nel browser: 214 controlli su 214 passano. Versione da chiavetta: 12 su 12 (Chrome ed Edge).
+Collaudo nel browser: 216 controlli su 216 passano. Versione da chiavetta: 12 su 12 (Chrome ed Edge).
 
 ## Versioni
 
@@ -52,6 +52,9 @@ La versione è quella di `package.json` e compare in alto a sinistra accanto al 
 si legge anche la data), nella prima riga della riga di comando, in F1 e nel LEGGIMI della chiavetta.
 Prima di distribuire una copia nuova: aumentare la versione in `package.json`, poi `crea-chiavetta.bat`.
 
+- 0.4.7 (14 ottobre 2026): in SPOSTA, COPIA, RUOTA, SCALA e SPECCHIO il punto base (e il primo
+  punto dell'asse di specchio) si aggancia anche agli oggetti selezionati, per esempio a un loro
+  angolo: prima gli snap li ignoravano già lì. Li ignorano solo dopo, mentre seguono il mouse.
 - 0.4.6 (14 ottobre 2026): snap sui fili di muri, porte e finestre. Il Medio di un muro c'è sul filo
   sinistro e sul destro, da spigolo a spigolo (per appoggiare un blocco, un mobile, un sanitario al
   muro: prima c'era solo quello dell'asse, dentro lo spessore); porte e finestre hanno medio e spigoli
