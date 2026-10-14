@@ -35,6 +35,11 @@ export interface Settings {
   chamferD1: number;
   chamferD2: number;
   offsetD: number;
+  /** vista 3D: altezza dei muri, delle porte, del davanzale e delle finestre */
+  wallH: number;
+  doorH: number;
+  winSill: number;
+  winH: number;
 }
 
 export const UNIT_MM: Record<Units, number> = { mm: 1, cm: 10, m: 1000 };
@@ -53,7 +58,7 @@ export const LT_NAMES: Record<LineType, string> = {
 };
 
 /** Impostazioni che sono lunghezze nelle unità del disegno. */
-const LENGTH_KEYS = ['textH', 'dimH', 'wallTh', 'doorW', 'windowW', 'hatchSp', 'grid', 'snap', 'filletR', 'offsetD', 'chamferD1', 'chamferD2'] as const;
+const LENGTH_KEYS = ['textH', 'dimH', 'wallTh', 'doorW', 'windowW', 'hatchSp', 'grid', 'snap', 'filletR', 'offsetD', 'chamferD1', 'chamferD2', 'wallH', 'doorH', 'winSill', 'winH'] as const;
 
 export function defaultSettings(units: Units = 'cm'): Settings {
   const k = 10 / UNIT_MM[units]; // valori pensati in cm
@@ -74,6 +79,10 @@ export function defaultSettings(units: Units = 'cm'): Settings {
     chamferD1: 0,
     chamferD2: 0,
     offsetD: 10 * k,
+    wallH: 270 * k,
+    doorH: 210 * k,
+    winSill: 90 * k,
+    winH: 140 * k,
   };
 }
 

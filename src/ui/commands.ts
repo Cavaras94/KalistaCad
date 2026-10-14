@@ -4,6 +4,8 @@ import { LineTool, PolylineTool, RectTool, CircleTool, ArcTool, EllipseTool, Spl
 import { BlockTool, InsertTool, BlockEditTool, BlockCloseTool, BlockRenameTool } from '../tools/blocks';
 import { ImageTool } from '../tools/extra';
 import { PolygonTool, PointTool, BreakTool, LengthenTool, DivideTool, PeditTool, LayerCurrentTool, LayerIsolateTool, LayerOffTool, LayerDeleteTool } from '../tools/extra';
+import { TilesTool } from '../tools/posa';
+import { LibraryTool } from '../tools/libreria';
 import { WallTool, DoorTool, WindowTool, RoomTool, DimTool, DimContinueTool, DimRadiusTool, DimAngularTool, DimBaselineTool, LeaderTool } from '../tools/plan';
 import {
   EraseTool, MoveTool, CopyTool, RotateTool, MirrorTool, ScaleTool, OffsetTool, TrimTool, ExtendTool, FilletTool,
@@ -48,6 +50,9 @@ export const COMMANDS: CmdDef[] = [
   { name: 'WALL', aliases: ['MURO', 'MU'], label: 'Muro', group: 'Planimetria', make: h => new WallTool(h) },
   { name: 'DOOR', aliases: ['PORTA', 'PO'], label: 'Porta', group: 'Planimetria', make: h => new DoorTool(h) },
   { name: 'WINDOW', aliases: ['FINESTRA', 'FI', 'WIN'], label: 'Finestra', group: 'Planimetria', make: h => new WindowTool(h) },
+  { name: 'TILES', aliases: ['PIASTRELLE', 'PAVIMENTO', 'RIVESTIMENTO', 'POSA'], label: 'Piastrelle: pavimento e rivestimento di un locale', group: 'Planimetria', make: h => new TilesTool(h) },
+  { name: 'LIBRARY', aliases: ['LIBRERIA', 'ARREDI', 'SANITARI', 'LIB'], label: 'Sanitari e arredi pronti, con il 3D', group: 'Planimetria', make: h => new LibraryTool(h) },
+  { name: 'COMPUTO', aliases: ['MATERIALI', 'QUANTITA'], label: 'Computo dei materiali (m², pezzi, scatole)', group: 'Planimetria', action: 'computo' },
   { name: 'ROOM', aliases: ['LOCALE', 'LO', 'STANZA'], label: 'Locale (superficie)', group: 'Planimetria', make: h => new RoomTool(h) },
 
   { name: 'DIMLINEAR', aliases: ['DLI', 'DIMLIN', 'QL', 'QUOTA'], label: 'Quota lineare', group: 'Quote', make: h => new DimTool(h, false) },
@@ -90,6 +95,7 @@ export const COMMANDS: CmdDef[] = [
   { name: 'ZOOM', aliases: ['Z'], label: 'Zoom', group: 'Vista', make: h => new ZoomTool(h) },
   { name: 'ZOOMEXTENTS', aliases: ['ZE', 'ZOOMESTENSIONI'], label: 'Zoom estensioni', group: 'Vista', action: 'zoomext', keys: 'doppio clic rotella' },
   { name: 'PAN', aliases: ['P'], label: 'Pan', group: 'Vista', make: h => new PanTool(h), keys: 'trascina con la rotella' },
+  { name: 'VIEW3D', aliases: ['3D', 'V3D', 'VISTA3D', 'TREDI'], label: 'Vista 3D: muri, pavimenti, rivestimenti e arredi', group: 'Vista', action: 'view3d' },
   { name: 'REGEN', aliases: ['RE', 'R', 'RIGENERA'], label: 'Rigenera', group: 'Vista', action: 'regen' },
 
   { name: 'DIST', aliases: ['DI', 'DISTANZA'], label: 'Distanza', group: 'Informazioni', make: h => new DistTool(h) },

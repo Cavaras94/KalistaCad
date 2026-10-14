@@ -8,7 +8,7 @@ Web app (TypeScript + Vite), gira nel browser.
 ```
 npm install
 npm run dev        # apre su http://localhost:5173
-npm test           # test unitari (171)
+npm test           # test unitari (188)
 npm run e2e        # collaudo in Chrome: digita i comandi come un utente
 npm run chiavetta  # prepara la versione da chiavetta in chiavetta/Kalista
 npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e in Edge
@@ -44,7 +44,7 @@ npm run e2e:chiavetta  # la prepara e la collauda aperta da disco, in Chrome e i
 - Stampa: A4–A0, scala 1:1…1:5000 o adatta, cartiglio, spessori in mm, PDF dal browser.
   Verificata la scala esatta (500 cm a 1:100 = 50 mm) e il formato del PDF.
 
-Collaudo nel browser: 216 controlli su 216 passano. Versione da chiavetta: 12 su 12 (Chrome ed Edge).
+Collaudo nel browser: 229 controlli su 229 passano. Versione da chiavetta: 14 su 14 (Chrome ed Edge).
 
 ## Versioni
 
@@ -52,6 +52,9 @@ La versione è quella di `package.json` e compare in alto a sinistra accanto al 
 si legge anche la data), nella prima riga della riga di comando, in F1 e nel LEGGIMI della chiavetta.
 Prima di distribuire una copia nuova: aumentare la versione in `package.json`, poi `crea-chiavetta.bat`.
 
+- 0.5.0 (14 ottobre 2026): 3D e piastrelle (vedi "Versione 0.5.0" più sotto): vista 3D ricavata dalla
+  pianta, pavimenti e rivestimenti con il computo, libreria di sanitari e arredi, immagine ed export
+  glTF/OBJ.
 - 0.4.7 (14 ottobre 2026): in SPOSTA, COPIA, RUOTA, SCALA e SPECCHIO il punto base (e il primo
   punto dell'asse di specchio) si aggancia anche agli oggetti selezionati, per esempio a un loro
   angolo: prima gli snap li ignoravano già lì. Li ignorano solo dopo, mentre seguono il mouse.
@@ -94,6 +97,49 @@ Prima di distribuire una copia nuova: aumentare la versione in `package.json`, p
 - `crea-chiavetta.bat`: prepara `chiavetta/Kalista`, la cartella da copiare sulla chiavetta. Sui PC dei
   ragazzi basta un doppio clic su `Kalista.html`: niente installazione, niente rete. La cartella va
   rigenerata dopo ogni modifica al programma.
+
+## Versione 0.5.0: 3D, piastrelle, sanitari e arredi
+
+Scelta fatta con l'utente: niente CAD 3D, ma un 3D che nasce dalla pianta, più le piastrelle (chi lo
+usa posa gres) e il computo, che serve per i preventivi.
+
+- **Altezze**: in Impostazioni altezza dei muri (270), delle porte (210), del davanzale (90) e delle
+  finestre (140); nel pannello Proprietà per ogni muro, porta e finestra. Le forme chiuse (polilinee,
+  cerchi, ellissi) hanno "Solido 3D: base e cima": con la cima sopra la base diventano un solido. È
+  così che sono fatti i sanitari e gli arredi della libreria, e si può dare un'altezza a qualunque oggetto.
+  Altezze, quote e piastrelle seguono scala, specchio e cambio di unità (`transform`).
+- **VISTA 3D** (3D, V3D; pulsante con il cubo): muri alzati con i loro angoli, architrave sopra le
+  porte, muro sotto e sopra le finestre con il vetro; pavimenti dei locali; rivestimenti sulle pareti
+  dei locali, tolti i vani; solidi di blocchi e forme con la quota. Con qualcosa selezionato mostra
+  solo quello. Vista d'insieme (girare, avvicinarsi, spostare) o "Dentro: locale" ad altezza d'occhio
+  (trascinare per guardarsi attorno, frecce o W A S D per camminare). Pulsanti Immagine (PNG),
+  Modello .glb (glTF con colori e piastrelle) e Modello .obj (solo le forme). Esc chiude.
+  Codice: `src/view3d/model.ts` (solo numeri, provato dai test), `scene.ts` (three.js), `viewer.ts`
+  (finestra). three.js 0.186.1, licenza MIT.
+- **PIASTRELLE** (PAVIMENTO, RIVESTIMENTO): clic dentro un locale (se non c'è, lo crea come LOCALE) →
+  finestra con pavimento e rivestimento: posa (dritta, sfalsata a metà o a un terzo, spina di pesce,
+  diagonale, con i disegni), lato lungo e corto in cm, fuga in mm, colore, m² per scatola, altezza del
+  rivestimento. In pianta si vedono le fughe del pavimento (dall'angolo in basso a sinistra del locale).
+  La posa è una griglia di rettangoli (`src/model/tiles.ts`, la stessa della spina di pesce dei
+  retini); un test controlla per ogni posa che le piastrelle coprano il piano senza buchi né
+  sovrapposizioni. Il rivestimento va sui lati del locale (i fili interni dei muri), tolte porte (fino
+  alla loro altezza) e finestre (dal davanzale in su).
+- **COMPUTO** (MATERIALI): tabella con, per ogni locale, m², pezzi e scatole di pavimento e
+  rivestimento, e i totali per piastrella; sfrido consigliato 10% (dritta e sfalsata) o 15% (spina e
+  diagonale), oppure uno a scelta; "Copia la tabella" per incollarla in un foglio di calcolo. I pezzi
+  sono la superficie divisa per quella di una piastrella, più lo sfrido.
+- **LIBRERIA** (ARREDI, SANITARI): 21 oggetti in tre gruppi (bagno, cucina, casa) con il disegno in
+  pianta e i solidi per il 3D (`src/library/arredi.ts`, misure in cm). Si mettono come blocchi sul
+  layer ARREDI; il punto da indicare è il centro del lato contro il muro (con lo snap Medio sul filo
+  del muro si appoggiano nel mezzo); rotazione nella finestra o con l'opzione R; si possono mettere più
+  copie di fila. In 3D sono bianchi, se non hanno un colore proprio.
+- In pianta le righe di decorazione (fughe, retini dei muri) sono più leggere dei contorni.
+- La finestra generica dei comandi ha anche colori, titoli di sezione e caselle che mostrano o
+  nascondono le voci che dipendono da loro.
+
+Restano da fare: porte con l'anta in 3D (oggi c'è il vano aperto), soffitti, luci e materiali più
+realistici; piastrelle con un'immagine (foto della piastrella) invece del colore; posa che parte da un
+punto scelto invece che dall'angolo; computo con il conteggio dei pezzi tagliati.
 
 ## Versione 0.4.5: finestre dei comandi
 

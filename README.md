@@ -18,6 +18,9 @@ I disegni restano sul computer di chi li fa: si salvano come file `.kalista`, ni
 - **Planimetria**: muri con le misure interne, esterne o sull'asse, angoli e innesti giuntati, muri con il retino (per esempio il muretto tecnico); porte e finestre che aprono il muro e lo seguono; locali con la superficie in m².
 - **Quote**: lineari, allineate, continue, dalla linea di base, raggio, diametro, angolari, direttrici. Di un muro si quota il filo, interno o esterno.
 - **Modifica**: sposta, copia, ruota, specchio, scala, offset, taglia, estendi, raccorda, smusso, serie, stira, spezza, unisci, esplodi, grip, annulla e ripristina.
+- **Piastrelle e computo**: pavimento e rivestimento di ogni locale (formato, fuga, posa dritta, sfalsata, a spina di pesce o in diagonale, colore, altezza del rivestimento), visti in pianta e in 3D; computo dei materiali in m², pezzi e scatole, con lo sfrido, da copiare in un foglio di calcolo.
+- **Vista 3D**: i muri si alzano da soli, con i vani di porte e finestre; pavimenti, rivestimenti, sanitari e arredi. Si gira attorno al modello o ci si mette dentro un locale ad altezza d'occhio; immagine PNG, modello glTF (.glb) e OBJ per altri programmi.
+- **Sanitari e arredi**: una libreria pronta (lavabi, vasi, docce, vasca, cucina, letti, armadio, tavolo…) con il disegno in pianta e l'altezza per il 3D.
 - **Blocchi**: crea, inserisci, modifica sul posto, rinomina.
 - **File**: formato `.kalista`; import ed export DXF; import DWG (tramite LibreDWG).
 - **Stampa**: fogli da A4 ad A0, scala esatta (1:50, 1:100…) o adattata, cartiglio, spessori di linea, PDF.
@@ -63,6 +66,8 @@ Web app in TypeScript con Vite, senza framework. Il disegno si fa su canvas, la 
 - `src/ui`: interfaccia, riga di comando, pannelli, finestre di dialogo
 - `src/io`: import ed export DXF/DWG, file `.kalista`
 - `src/print`: impaginazione e stampa
+- `src/view3d`: vista 3D (il modello ricavato dalla pianta, poi la scena di three.js)
+- `src/library`: sanitari e arredi della libreria
 
 `STATO.md` è il diario del lavoro: cosa c'è, cosa è stato provato, i difetti noti e le cose da fare.
 
@@ -78,4 +83,4 @@ Kalista è software libero: lo si può usare, studiare, modificare e ridistribui
 
 Il programma è distribuito sperando che sia utile, ma **senza alcuna garanzia**.
 
-Usa [LibreDWG](https://www.gnu.org/software/libredwg/) (GPL-3.0, tramite `@mlightcad/libredwg-web`) per leggere i file DWG e [dxf-parser](https://github.com/gdsestimating/dxf-parser) (MIT) per i DXF. AutoCAD è un marchio registrato di Autodesk, Inc.; DraftSight è un marchio registrato di Dassault Systèmes. Sono citati solo per indicare la compatibilità dei comandi e dei file: Kalista è un progetto indipendente, scritto da zero, senza legami con queste aziende e senza alcun loro codice, logo o approvazione.
+Usa [LibreDWG](https://www.gnu.org/software/libredwg/) (GPL-3.0, tramite `@mlightcad/libredwg-web`) per leggere i file DWG, [dxf-parser](https://github.com/gdsestimating/dxf-parser) (MIT) per i DXF e [three.js](https://threejs.org/) (MIT) per la vista 3D. AutoCAD è un marchio registrato di Autodesk, Inc.; DraftSight è un marchio registrato di Dassault Systèmes. Sono citati solo per indicare la compatibilità dei comandi e dei file: Kalista è un progetto indipendente, scritto da zero, senza legami con queste aziende e senza alcun loro codice, logo o approvazione.

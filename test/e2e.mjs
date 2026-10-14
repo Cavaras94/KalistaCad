@@ -919,6 +919,70 @@ check('domanda in finestra: No torna alla richiesta del nome', !(await modalOpen
 await kb.press('Escape');
 await page.evaluate(() => localStorage.setItem('planimetrie.dialogs', '0'));
 
+// ---- piastrelle, computo, libreria, vista 3D ed export
+await zoomTo(39900, -100, 40400, 300);
+await cmd('MURO'); await cmd('G'); await cmd('I');
+await cmd('40000,0'); await cmd('40300,0'); await cmd('40300,240'); await cmd('40000,240'); await cmd('C');
+await cmd('PIASTRELLE');
+await clickWorld(40150, 120);
+check('PIASTRELLE: clic in una stanza senza locale, si apre la finestra con le pose disegnate', (await modalOpen()) && (await page.locator('.modal .tile canvas').count()) === 10, String(await page.locator('.modal .tile').count()));
+await page.click('.modal .tile[data-value="herring"] >> nth=0');
+await page.fill('.modal input[name="fl"]', '60'); await page.fill('.modal input[name="fw"]', '15');
+await page.fill('.modal input[name="fbox"]', '1,08');
+await page.check('.modal input[name="con"]');
+await page.fill('.modal input[name="cl"]', '30'); await page.fill('.modal input[name="cw"]', '30');
+await page.fill('.modal input[name="chgt"]', '120');
+await kb.press('Enter');
+const tRoom = await lastEnt();
+check('PIASTRELLE: il locale nasce con pavimento a spina e rivestimento a 120', tRoom.t === 'room' && tRoom.floor?.lay === 'herring' && tRoom.floor.l === 60 && tRoom.floor.w === 15 && tRoom.floor.j === 0.2 && tRoom.floor.box === 1.08 && tRoom.clad?.hgt === 120 && tRoom.clad.lay === 'grid', JSON.stringify(tRoom));
+check('PIASTRELLE: computo subito nella riga di comando', (await history()).includes('pavimento 7,20 m², 92 pezzi, 8 scatole (sfrido 15%); rivestimento 12,96 m²'), (await history()).slice(-260));
+await cmd('COMPUTO');
+const comp = await page.textContent('.modal');
+check('COMPUTO: tabella con pavimento, rivestimento e totali', /Pavimento/.test(comp) && /7,20/.test(comp) && /Rivestimento/.test(comp) && /12,96/.test(comp) && /Totale per piastrella/.test(comp), comp.slice(0, 200));
+await page.fill('.modal input[name="sfrido"]', '0');
+const comp0 = await page.textContent('.computo-table');
+check('COMPUTO: con lo sfrido a 0 i pezzi sono quelli esatti', comp0.includes('0%80'), comp0);
+await kb.press('Escape');
+await cmd('LIBRERIA');
+check('LIBRERIA: la finestra con i disegni di sanitari e arredi', (await modalOpen()) && (await page.locator('.modal .tile canvas').count()) >= 15);
+await page.click('.modal .tile[data-value="lavabo-mobile"]');
+await kb.press('Enter');
+await cmd('40150,240'); await cmd('');
+const lib = await lastEnt();
+const libDef = await page.evaluate(() => window.app.doc.blocks['Mobile lavabo 80×50']);
+check('LIBRERIA: il mobile lavabo entra come blocco sul layer ARREDI, con il suo solido', lib.t === 'insert' && lib.name === 'Mobile lavabo 80×50' && lib.layer === 'ARREDI' && !!libDef && libDef.ents.some(e => e.z && e.z[1] === 85), JSON.stringify(lib));
+// solo la stanza: con una selezione, la vista 3D mostra quella
+await page.evaluate(async () => { const { pickBox } = await import('/src/view/snap.ts'); window.app.setSelection(pickBox(window.app.doc, { x0: 39950, y0: -60, x1: 40350, y1: 300 }, false).map(e => e.id)); });
+await cmd('3D');
+await page.waitForSelector('.v3d canvas');
+await page.waitForTimeout(800);
+const v3 = await page.evaluate(() => { const m = window.__v3d.model; return { walls: m.prisms.filter(p => p.kind === 'wall').length, solids: m.prisms.filter(p => p.kind === 'solid').length, clads: m.clads.length, floors: m.floors.length }; });
+check('VISTA 3D della selezione: i muri della stanza, il pavimento, il rivestimento e il lavabo', v3.walls === 4 && v3.solids === 1 && v3.clads === 4 && v3.floors === 1 && (await history()).includes('degli oggetti selezionati'), JSON.stringify(v3));
+await page.screenshot({ path: join(OUT, 'vista3d.png') });
+const pix3 = await page.evaluate(() => { const c = document.querySelector('.v3d canvas'); const g = document.createElement('canvas'); g.width = 40; g.height = 40; const x = g.getContext('2d'); x.drawImage(c, 0, 0, 40, 40); const d = x.getImageData(0, 0, 40, 40).data; const set = new Set(); for (let i = 0; i < d.length; i += 16) set.add(`${d[i] >> 4},${d[i + 1] >> 4},${d[i + 2] >> 4}`); return set.size; });
+check('VISTA 3D: qualcosa è disegnato (più colori sulla tela)', pix3 > 4, String(pix3));
+await page.evaluate(() => {
+  window.__orig3 = window.showSaveFilePicker; window.__saved3 = [];
+  window.showSaveFilePicker = async o => ({ createWritable: async () => ({ write: async b => { window.__saved3.push({ name: o.suggestedName, size: b.size, head: [...new Uint8Array(await b.slice(0, 4).arrayBuffer())] }); }, close: async () => {} }) });
+});
+const saved3 = n => page.waitForFunction(k => window.__saved3.length >= k, n, { timeout: 30000 }).then(() => page.evaluate(() => window.__saved3.at(-1)));
+await page.click('.v3d-bar button:has-text("Immagine")');
+const png = await saved3(1);
+check('VISTA 3D: immagine PNG', png.name.endsWith('3D.png') && png.head.join(',') === '137,80,78,71' && png.size > 5000, JSON.stringify(png));
+await page.click('.v3d-bar button:has-text(".glb")');
+const glb = await saved3(2);
+check('VISTA 3D: modello glTF binario (.glb)', glb.name.endsWith('.glb') && String.fromCharCode(...glb.head) === 'glTF' && glb.size > 5000, JSON.stringify(glb));
+await page.click('.v3d-bar button:has-text(".obj")');
+const obj = await saved3(3);
+check('VISTA 3D: modello OBJ', obj.name.endsWith('.obj') && obj.size > 1000, JSON.stringify(obj));
+await page.selectOption('.v3d select', '0');
+await page.waitForTimeout(300);
+await page.screenshot({ path: join(OUT, 'vista3d-dentro.png') });
+await kb.press('Escape');
+check('VISTA 3D: Esc chiude e si torna al disegno', !(await page.$('.v3d')) && (await prompt()) === 'Comando:');
+await page.evaluate(() => { window.showSaveFilePicker = window.__orig3; });
+await cmd('MURO'); await cmd('G'); await cmd('C'); await kb.press('Escape');
+
 await zoomTo(...viewBefore);
 
 // ---- AREA con un clic dentro

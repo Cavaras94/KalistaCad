@@ -8,7 +8,10 @@ export interface Opt { key: string; label: string }
 
 export type InputMode = 'point' | 'select' | 'entity' | 'text' | 'none';
 
-/** Una voce della finestra con le impostazioni di un comando; when = si vede solo se la scelta when[0] vale when[1]. */
+/**
+ * Una voce della finestra con le impostazioni di un comando; when = si vede solo se la scelta (o la
+ * casella, con 'true' e 'false') when[0] vale when[1].
+ */
 export type FormField = { when?: [string, string] } & (
   /** numero; min = il più piccolo ammesso (escluso, salvo minIncl; di partenza 0); free = qualunque numero; int = solo interi */
   | { k: 'num'; key: string; label: string; value: number; unit?: string; min?: number; minIncl?: boolean; max?: number; free?: boolean; int?: boolean; hint?: string }
@@ -16,7 +19,10 @@ export type FormField = { when?: [string, string] } & (
   | { k: 'choice'; key: string; label: string; value: string; options: [string, string][] }
   /** una scelta fra riquadri con il disegno di ciascuna voce (retini, blocchi) */
   | { k: 'tiles'; key: string; label: string; value: string; tiles: { value: string; label: string; prims: Prim[] }[] }
-  | { k: 'check'; key: string; label: string; value: boolean });
+  | { k: 'check'; key: string; label: string; value: boolean }
+  | { k: 'color'; key: string; label: string; value: string }
+  /** titolo di una parte della finestra (non è un valore) */
+  | { k: 'head'; key: string; label: string; value?: undefined });
 
 export interface FormSpec {
   title: string;

@@ -118,7 +118,9 @@ function paintPrims(g: CanvasRenderingContext2D, view: View, ps: Prim[], st: Pai
         }
         if (p.closed) g.closePath();
         if (p.fill) fill(g, p.fill, st, 'nonzero');
-        if (p.stroke !== false) g.stroke();
+        // le righe di decorazione (fughe, retini dei muri) più leggere dei contorni
+        if (p.deco) { const a = g.globalAlpha; g.globalAlpha = a * 0.45; g.stroke(); g.globalAlpha = a; }
+        else if (p.stroke !== false) g.stroke();
         break;
       }
       case 'img': {

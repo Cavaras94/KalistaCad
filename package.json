@@ -1,6 +1,6 @@
 {
   "name": "kalista",
-  "version": "0.4.7",
+  "version": "0.5.0",
   "description": "Kalista: disegno 2D di planimetrie con stampa in scala",
   "scripts": {
     "dev": "vite",
@@ -16,9 +16,11 @@
   "type": "module",
   "dependencies": {
     "@mlightcad/libredwg-web": "^0.7.16",
-    "dxf-parser": "^1.1.2"
+    "dxf-parser": "^1.1.2",
+    "three": "^0.186.1"
   },
   "devDependencies": {
+    "@types/three": "^0.186.0",
     "playwright-core": "^1.64.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",

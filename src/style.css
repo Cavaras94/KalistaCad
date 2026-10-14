@@ -114,12 +114,33 @@ body.history-open #history { height: 40vh; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0 14px; }
 .form-grid .span2 { grid-column: 1 / -1; }
 .checks { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+/* vista 3D */
+.v3d { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; background: var(--bg); }
+.v3d-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--ui); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.v3d-bar strong { font-size: 14px; margin-right: 6px; }
+.v3d-bar button { background: var(--ui2); border: 1px solid var(--line); border-radius: 4px; padding: 4px 12px; cursor: pointer; color: var(--text); }
+.v3d-bar button:hover { background: var(--ui3); }
+.v3d-bar button.primary { background: #2f6fbf; border-color: #3d82d6; color: #fff; }
+.v3d-hint { color: var(--muted); font-size: 12px; }
+.v3d-gap { flex: 1; }
+.v3d-canvas { flex: 1; min-height: 0; position: relative; }
+.v3d-canvas canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
 /* finestre con le impostazioni dei comandi */
 .cmd-form { display: flex; flex-direction: column; min-width: 300px; }
 .cmd-form .field input[type="text"] { max-width: 160px; }
 .cmd-form input.bad { border-color: var(--warn); outline-color: var(--warn); }
 .cmd-form small.err { color: var(--warn); }
 .cmd-form small.err:empty { display: none; }
+.computo .inline-field input { max-width: 120px; }
+.computo-table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+.computo-table th { text-align: left; color: var(--accent); font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.computo-table td { padding: 4px 8px; border-bottom: 1px solid #2c323c; }
+.computo-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.computo-table tr.sep th { color: var(--muted); padding-top: 12px; }
+.computo-table tr.tot td { font-weight: 600; }
+.cmd-form .form-head { font-weight: 600; margin: 6px 0 6px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--text); }
+.cmd-form .form-head:first-child { border-top: 0; padding-top: 0; }
+.cmd-form input[type="color"] { width: 64px; height: 28px; padding: 1px; }
 .cmd-form .check { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; cursor: pointer; }
 .seg { display: flex; flex-wrap: wrap; gap: 4px; }
 .seg button { background: var(--ui2); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; color: var(--text); }

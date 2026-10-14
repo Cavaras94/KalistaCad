@@ -6,6 +6,8 @@ import {
 } from './geom';
 import type { WallCtx, WallInfo } from './walls';
 import type { LineType } from './document';
+import type { TileGrid } from './tiles';
+import { gridRects, roomBox, tileGrid } from './tiles';
 import { wallPrims, buildWallCtx } from './walls';
 
 export type HAlign = 'l' | 'c' | 'r';
@@ -20,8 +22,13 @@ export const HATCH_NAMES: Record<HatchPattern, string> = {
 /** lt e lw: tipo di linea e spessore di stampa propri dell'entità; assenti = quelli del layer. */
 interface Base { id: number; layer: string; color?: string; g?: number; lt?: LineType; lw?: number }
 export interface LineE extends Base { t: 'line'; a: Vec; b: Vec }
-export interface PolyE extends Base { t: 'poly'; pts: Vec[]; bulges?: number[]; closed: boolean }
-export interface CircleE extends Base { t: 'circle'; c: Vec; r: number }
+/**
+ * z = nella vista 3D la forma chiusa diventa un solido, dalla quota z[0] alla z[1] (nelle unità del
+ * disegno). Serve ai sanitari e agli arredi della libreria, e a chi vuole dare un'altezza a un oggetto.
+ */
+type Solid3 = { z?: [number, number] };
+export interface PolyE extends Base, Solid3 { t: 'poly'; pts: Vec[]; bulges?: number[]; closed: boolean }
+export interface CircleE extends Base, Solid3 { t: 'circle'; c: Vec; r: number }
 export interface ArcE extends Base { t: 'arc'; c: Vec; r: number; a0: number; a1: number }
 export interface TextE extends Base { t: 'text'; p: Vec; s: string; h: number; rot: number; ha: HAlign; va: VAlign }
 /**
@@ -34,16 +41,30 @@ export interface TextE extends Base { t: 'text'; p: Vec; s: string; h: number; r
 export type DimKind = 'rad' | 'dia' | 'ang';
 export interface DimE extends Base { t: 'dim'; a: Vec; b: Vec; p: Vec; ang?: number; s?: string; k?: DimKind; c?: Vec; h?: number }
 /** Muro. pat = retino al posto del riempimento (assente = riempimento normale); sp = passo del retino (assente = un terzo dello spessore). */
-export interface WallE extends Base { t: 'wall'; a: Vec; b: Vec; th: number; pat?: HatchPattern; sp?: number }
-export interface DoorE extends Base { t: 'door'; p: Vec; ang: number; w: number; th: number; sw: 1 | -1; hg: 1 | -1 }
-export interface WindowE extends Base { t: 'window'; p: Vec; ang: number; w: number; th: number }
-export interface RoomE extends Base { t: 'room'; pts: Vec[]; name: string }
+export interface WallE extends Base { t: 'wall'; a: Vec; b: Vec; th: number; pat?: HatchPattern; sp?: number; /** altezza; assente = quella delle impostazioni */ h?: number }
+/** h = altezza del vano; assente = quella delle impostazioni */
+export interface DoorE extends Base { t: 'door'; p: Vec; ang: number; w: number; th: number; sw: 1 | -1; hg: 1 | -1; h?: number }
+/** sill = altezza del davanzale, h = altezza del vano; assenti = quelle delle impostazioni */
+export interface WindowE extends Base { t: 'window'; p: Vec; ang: number; w: number; th: number; sill?: number; h?: number }
+
+/** Posa delle piastrelle: dritta, sfalsata a metà o a un terzo, spina di pesce, in diagonale. */
+export type TileLay = 'grid' | 'half' | 'third' | 'herring' | 'diag';
+export const TILE_LAY_NAMES: Record<TileLay, string> = { grid: 'Dritta', half: 'Sfalsata a metà', third: 'Sfalsata a un terzo', herring: 'Spina di pesce', diag: 'In diagonale' };
+/**
+ * Piastrelle di un pavimento o di un rivestimento: l = lato lungo, w = lato corto, j = fuga (nelle
+ * unità del disegno); color = colore della piastrella; box = m² in una scatola (assente = non si sa).
+ */
+export interface Tiles { l: number; w: number; j: number; lay: TileLay; color: string; box?: number }
+/** Rivestimento delle pareti di un locale, dal pavimento fino all'altezza hgt. */
+export type Cladding = Tiles & { hgt: number };
+/** floor = pavimento, clad = rivestimento delle pareti (i lati del locale, cioè i fili interni dei muri) */
+export interface RoomE extends Base { t: 'room'; pts: Vec[]; name: string; floor?: Tiles; clad?: Cladding }
 export interface HatchE extends Base { t: 'hatch'; loops: Vec[][]; pat: HatchPattern; sp: number; ang: number }
 /**
  * Ellisse: a = un semiasse (vettore dal centro), k = rapporto fra l'altro semiasse e questo.
  * Con a0 e a1 è un arco di ellisse, in senso antiorario da a0 ad a1 (angoli del parametro, non al centro).
  */
-export interface EllipseE extends Base { t: 'ellipse'; c: Vec; a: Vec; k: number; a0?: number; a1?: number }
+export interface EllipseE extends Base, Solid3 { t: 'ellipse'; c: Vec; a: Vec; k: number; a0?: number; a1?: number }
 /** Immagine (JPG, PNG): p = angolo in basso a sinistra, w e h nelle unità del disegno, src = i dati dell'immagine. */
 export interface ImageE extends Base { t: 'image'; p: Vec; w: number; h: number; rot: number; src: string }
 /** Punto: un segno a crocetta, utile come riferimento per gli snap (DIVIDI e MISURA ne mettono). */
@@ -373,6 +394,7 @@ function roomPrims(e: RoomE, ctx: PrimCtx): Prim[] {
   const H = ctx.dimH;
   const area = `S = ${fmtNum(roomArea(e) / ctx.areaDiv, 2)} m²`;
   const out: Prim[] = [{ k: 'pl', pts: e.pts, closed: true, fill: 'tint', stroke: false }];
+  if (e.floor) out.push(...floorJoints(e.pts, e.floor));
   if (e.name) {
     out.push({ k: 'text', p: add(c, v(0, H * 0.35)), s: e.name, h: H * 1.25, rot: 0, ha: 'c', va: 'b' });
     out.push({ k: 'text', p: sub(c, v(0, H * 0.35)), s: area, h: H, rot: 0, ha: 'c', va: 't' });
@@ -425,50 +447,43 @@ export const HATCH_TILES: Partial<Record<HatchPattern, HatchTiles>> = {
 const MAX_TILE_CELLS = 8000;
 
 function tilePrims(e: Pick<HatchE, 'sp' | 'ang'>, loops: Vec[][], t: HatchTiles): Prim[] {
-  const rot = e.ang + t.base, co = Math.cos(rot), si = Math.sin(rot);
-  let sp = Math.max(e.sp, 1e-9);
-  // dal sistema del retino al disegno e ritorno
-  const W = (x: number, y: number): Vec => v((x * co - y * si) * sp, (x * si + y * co) * sp);
-  const pts = loops.flat();
-  const det = t.a[0] * t.b[1] - t.a[1] * t.b[0];
-  // celle della griglia che toccano l'area: si passa alle coordinate della griglia
-  const cellRange = () => {
-    let p0 = Infinity, p1 = -Infinity, q0 = Infinity, q1 = -Infinity;
-    for (const w of pts) {
-      const x = (w.x * co + w.y * si) / sp, y = (-w.x * si + w.y * co) / sp;
-      const p = (x * t.b[1] - y * t.b[0]) / det, q = (t.a[0] * y - t.a[1] * x) / det;
-      p0 = Math.min(p0, p); p1 = Math.max(p1, p); q0 = Math.min(q0, q); q1 = Math.max(q1, q);
-    }
-    // una cella sporge dalla sua origine: qualche cella in più per lato
-    return { p0: Math.floor(p0) - 6, p1: Math.ceil(p1) + 6, q0: Math.floor(q0) - 2, q1: Math.ceil(q1) + 2 };
-  };
-  let r = cellRange();
+  const box = roomBox(loops.flat());
   // un'area enorme rispetto al passo: piastrelle più grandi, come per le righe dei retini
-  while ((r.p1 - r.p0 + 1) * (r.q1 - r.q0 + 1) > MAX_TILE_CELLS) { sp *= 2; r = cellRange(); }
+  for (let sp = Math.max(e.sp, 1e-9); ; sp *= 2) {
+    const g: TileGrid = { base: e.ang + t.base, a: [t.a[0] * sp, t.a[1] * sp], b: [t.b[0] * sp, t.b[1] * sp], rects: t.rects.map(r => r.map(c => c * sp) as [number, number, number, number]) };
+    const quads = gridRects(g, box, v(0, 0), MAX_TILE_CELLS);
+    if (quads) return quadEdges(quads, loops);
+  }
+}
+
+/** Lati dei rettangoli (una volta sola ciascuno), per la parte che cade dentro il contorno. */
+function quadEdges(quads: Vec[][], loops: Vec[][]): Prim[] {
   const out: Prim[] = [];
   const seen = new Set<string>();
   const key = (a: Vec, b: Vec) => [a, b].map(q => `${Math.round(q.x * 1e6)},${Math.round(q.y * 1e6)}`).sort().join('|');
-  for (let p = r.p0; p <= r.p1; p++) {
-    for (let q = r.q0; q <= r.q1; q++) {
-      const ox = p * t.a[0] + q * t.b[0], oy = p * t.a[1] + q * t.b[1];
-      for (const [x0, y0, x1, y1] of t.rects) {
-        const c = [W(ox + x0, oy + y0), W(ox + x1, oy + y0), W(ox + x1, oy + y1), W(ox + x0, oy + y1)];
-        for (let i = 0; i < 4; i++) {
-          const a = c[i], b = c[(i + 1) % 4];
-          const k = key(a, b);
-          if (seen.has(k)) continue;
-          seen.add(k);
-          // il lato della piastrella, solo per la parte dentro il contorno
-          const L = dist(a, b), d = mul(sub(b, a), 1 / L);
-          for (const [s0, s1] of clipLineToLoops(a, d, loops)) {
-            const t0 = Math.max(0, dot(sub(s0, a), d)), t1 = Math.min(L, dot(sub(s1, a), d));
-            if (t1 - t0 > 1e-9) out.push({ k: 'pl', pts: [add(a, mul(d, t0)), add(a, mul(d, t1))] });
-          }
-        }
+  for (const c of quads) {
+    for (let i = 0; i < 4; i++) {
+      const a = c[i], b = c[(i + 1) % 4];
+      const k = key(a, b);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const L = dist(a, b), d = mul(sub(b, a), 1 / L);
+      for (const [s0, s1] of clipLineToLoops(a, d, loops)) {
+        const t0 = Math.max(0, dot(sub(s0, a), d)), t1 = Math.min(L, dot(sub(s1, a), d));
+        if (t1 - t0 > 1e-9) out.push({ k: 'pl', pts: [add(a, mul(d, t0)), add(a, mul(d, t1))] });
       }
     }
   }
   return out;
+}
+
+/** Piastrelle di un pavimento disegnate in pianta: le fughe, dall'angolo in basso a sinistra del locale. */
+const MAX_FLOOR_CELLS = 20000;
+export function floorJoints(pts: Vec[], t: Tiles): Prim[] {
+  if (pts.length < 3 || !(t.l > 0 && t.w > 0)) return [];
+  const box = roomBox(pts);
+  const quads = gridRects(tileGrid(t), box, v(box.x0, box.y0), MAX_FLOOR_CELLS);
+  return quads ? quadEdges(quads, [pts]).map(p => (p.k === 'pl' ? { ...p, deco: true } : p)) : [];
 }
 
 function hatchPrims(e: Pick<HatchE, 'loops' | 'pat' | 'sp' | 'ang'>): Prim[] {
@@ -955,7 +970,13 @@ export function transform<E extends Ent>(e: E, m: Mat): E {
       break;
     case 'door': r = { ...x, p: P(x.p), ang: mapAngle(m, x.ang), w: x.w * s, th: x.th * s, sw: mirror ? (-x.sw as 1 | -1) : x.sw }; break;
     case 'window': r = { ...x, p: P(x.p), ang: mapAngle(m, x.ang), w: x.w * s, th: x.th * s }; break;
-    case 'room': r = { ...x, pts: x.pts.map(P) }; break;
+    case 'room': {
+      r = { ...x, pts: x.pts.map(P) };
+      const tl = <T extends Tiles>(t: T): T => ({ ...t, l: t.l * s, w: t.w * s, j: t.j * s });
+      if (x.floor) r.floor = tl(x.floor);
+      if (x.clad) r.clad = { ...tl(x.clad), hgt: x.clad.hgt * s };
+      break;
+    }
     case 'hatch': r = { ...x, loops: x.loops.map(l => l.map(P)), sp: x.sp * s, ang: mapAngle(m, x.ang) }; break;
     case 'ellipse':
       r = { ...x, c: P(x.c), a: applyDir(m, x.a) };
@@ -981,6 +1002,13 @@ export function transform<E extends Ent>(e: E, m: Mat): E {
       if (mirror) { if (x.flip) delete r.flip; else r.flip = true; }
       break;
     }
+  }
+  // le misure in altezza (vista 3D) seguono la scala del disegno
+  const hz = r as { h?: number; sill?: number; z?: [number, number] };
+  if (s !== 1) {
+    if (hz.h !== undefined && (r.t === 'wall' || r.t === 'door' || r.t === 'window')) hz.h *= s;
+    if (hz.sill !== undefined) hz.sill *= s;
+    if (hz.z) hz.z = [hz.z[0] * s, hz.z[1] * s];
   }
   return r as E;
 }

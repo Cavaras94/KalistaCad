@@ -16,7 +16,7 @@ import { findCommand, suggest, COMMANDS } from './commands';
 import { icon } from './icons';
 import { logo, VERSION, VERSION_LONG } from './logo';
 import { Panels } from './panels';
-import { settingsDialog, helpDialog, printDialog, confirmBox, askText, importUnitsDialog, chooseDialog, pickImageFile, writeBox, formDialog, yesNoDialog, dialogsOn } from './dialogs';
+import { settingsDialog, helpDialog, printDialog, confirmBox, askText, importUnitsDialog, chooseDialog, pickImageFile, writeBox, formDialog, yesNoDialog, dialogsOn, computoDialog } from './dialogs';
 import { exportDxf } from '../io/dxf-export';
 import { importDxf, importDwg } from '../io/files';
 import type { ImportResult } from '../io/importer';
@@ -201,7 +201,7 @@ export class App implements Host {
     if (!def) { this.msg(`Comando sconosciuto: "${cmd}". Digitare ? per l'elenco dei comandi.`); return; }
     if (def.action) {
       // salvare o guardare layer e proprietà non deve far perdere il comando in corso
-      if (this.tool && !['zoomext', 'regen', 'help', 'save', 'saveas', 'dxfout', 'layer', 'properties', 'selectall'].includes(def.action)) { this.dropSuspended(); this.cancelTool(true); }
+      if (this.tool && !['zoomext', 'view3d', 'regen', 'help', 'save', 'saveas', 'dxfout', 'layer', 'properties', 'selectall'].includes(def.action)) { this.dropSuspended(); this.cancelTool(true); }
       this.action(def.action);
       if (!['undo', 'redo'].includes(def.action)) this.lastCmd = def.name;
       return;
@@ -992,6 +992,8 @@ export class App implements Host {
         break;
       }
       case 'zoomext': this.zoomExtents(); break;
+      case 'computo': computoDialog(this.doc); break;
+      case 'view3d': void import('../view3d/viewer').then(m => m.open3D(this.doc, this.fileName, s => this.msg(s), this.selection.size ? new Set(this.selection) : undefined)).catch(err => this.msg(`Vista 3D non disponibile: ${(err as Error).message}`)); break;
       case 'regen': this.baseDirty = true; this.schedule(); break;
       case 'new': this.newDoc(); break;
       case 'open': this.pickFile('open'); break;
@@ -1158,11 +1160,11 @@ export class App implements Host {
       ['File', [['new', 'NEW', 'Nuovo (Ctrl+N)'], ['newfrom', 'NEWFROM', 'Nuovo da un file base: lo apre come copia senza nome, il file base resta com\'è (NUOVODA)'], ['open', 'OPEN', 'Apri disegno, DXF o DWG (Ctrl+O)'], ['save', 'SAVE', 'Salva sullo stesso file (Ctrl+S)'], ['saveas', 'SAVEAS', 'Salva con nome: in un file nuovo (Ctrl+Maiusc+S)'], ['import', 'IMPORT', 'Importa DXF/DWG nel disegno'], ['export', 'DXFOUT', 'Esporta DXF'], ['print', 'PRINT', 'Stampa (Ctrl+P)']]],
       ['', [['undo', 'UNDO', 'Annulla (Ctrl+Z)'], ['redo', 'REDO', 'Ripristina (Ctrl+Y)']]],
       ['Disegno', [['line', 'LINE', 'Linea (L)'], ['pline', 'PLINE', 'Polilinea (PL)'], ['rect', 'RECTANGLE', 'Rettangolo (REC)'], ['circle', 'CIRCLE', 'Cerchio (C)'], ['arc', 'ARC', 'Arco (A)'], ['polygon', 'POLYGON', 'Poligono (POL)'], ['ellipse', 'ELLIPSE', 'Ellisse (EL)'], ['spline', 'SPLINE', 'Spline (SPL)'], ['point', 'POINT', 'Punto (PUNTO)'], ['text', 'TEXT', 'Testo (T)'], ['hatch', 'HATCH', 'Tratteggio e retini (H)'], ['image', 'IMAGE', 'Inserisci immagine JPG o PNG (IMMAGINE)']]],
-      ['Planimetria', [['wall', 'WALL', 'Muro (MURO)'], ['door', 'DOOR', 'Porta (PORTA)'], ['window', 'WINDOW', 'Finestra (FINESTRA)'], ['room', 'ROOM', 'Locale con superficie (LOCALE)']]],
+      ['Planimetria', [['wall', 'WALL', 'Muro (MURO)'], ['door', 'DOOR', 'Porta (PORTA)'], ['window', 'WINDOW', 'Finestra (FINESTRA)'], ['room', 'ROOM', 'Locale con superficie (LOCALE)'], ['tiles', 'TILES', 'Piastrelle: pavimento e rivestimento di un locale (PIASTRELLE)'], ['library', 'LIBRARY', 'Sanitari e arredi pronti, con il 3D (LIBRERIA)'], ['computo', 'COMPUTO', 'Computo dei materiali: m², pezzi e scatole (COMPUTO)']]],
       ['Quote', [['dimlin', 'DIMLINEAR', 'Quota lineare (DLI)'], ['dimali', 'DIMALIGNED', 'Quota allineata (DAL)'], ['dimcont', 'DIMCONTINUE', 'Quota continua (DCO)'], ['dimrad', 'DIMRADIUS', 'Quota raggio (DRA)'], ['dimdia', 'DIMDIAMETER', 'Quota diametro (DDI)'], ['dimbase', 'DIMBASELINE', 'Quota dalla linea di base (DBA)'], ['dimang', 'DIMANGULAR', 'Quota angolare (DAN)'], ['leader', 'LEADER', 'Direttrice con testo (LE)']]],
       ['Blocchi', [['block', 'BLOCK', 'Crea blocco dalla selezione (B)'], ['insert', 'INSERT', 'Inserisci blocco (I)'], ['bedit', 'BEDIT', 'Modifica blocco sul posto (BE); per finire CHIUDIBLOCCO']]],
       ['Modifica', [['move', 'MOVE', 'Sposta (M)'], ['copy', 'COPY', 'Copia (CO)'], ['rotate', 'ROTATE', 'Ruota (RO)'], ['mirror', 'MIRROR', 'Specchio (MI)'], ['scale', 'SCALE', 'Scala (SC)'], ['offset', 'OFFSET', 'Offset (O)'], ['trim', 'TRIM', 'Taglia (TR)'], ['extend', 'EXTEND', 'Estendi (EX)'], ['fillet', 'FILLET', 'Raccorda (F)'], ['chamfer', 'CHAMFER', 'Smusso (CHA)'], ['array', 'ARRAY', 'Serie (AR)'], ['break', 'BREAK', 'Spezza (BR)'], ['lengthen', 'LENGTHEN', 'Allunga o accorcia (LEN)'], ['divide', 'DIVIDE', 'Dividi in parti uguali (DIV)'], ['pedit', 'PEDIT', 'Modifica polilinea (PE)'], ['stretch', 'STRETCH', 'Stira (S)'], ['join', 'JOIN', 'Unisci (J)'], ['explode', 'EXPLODE', 'Esplodi (X)'], ['matchprop', 'MATCHPROP', 'Copia proprietà: layer, colore, stile di quote e testi (MA)'], ['erase', 'ERASE', 'Cancella (E, Canc)']]],
-      ['Vista', [['zoomext', 'ZOOMEXTENTS', 'Zoom estensioni (ZE, doppio clic rotella)'], ['zoomwin', 'ZOOM', 'Zoom (Z)'], ['pan', 'PAN', 'Pan (P)'], ['dist', 'DIST', 'Distanza (DI)'], ['area', 'AREA', 'Area (AA): per vertici, clic dentro un\'area chiusa, o di un oggetto']]],
+      ['Vista', [['zoomext', 'ZOOMEXTENTS', 'Zoom estensioni (ZE, doppio clic rotella)'], ['zoomwin', 'ZOOM', 'Zoom (Z)'], ['pan', 'PAN', 'Pan (P)'], ['view3d', 'VIEW3D', 'Vista 3D (3D): muri, pavimenti, rivestimenti e arredi'], ['dist', 'DIST', 'Distanza (DI)'], ['area', 'AREA', 'Area (AA): per vertici, clic dentro un\'area chiusa, o di un oggetto']]],
       ['', [['settings', 'SETTINGS', 'Impostazioni (DS)'], ['help', 'HELP', 'Comandi e scorciatoie (F1)']]],
     ];
     const brand = document.createElement('div');

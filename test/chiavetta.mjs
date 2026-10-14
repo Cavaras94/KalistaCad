@@ -45,6 +45,11 @@ for (const exe of browsers.filter(p => existsSync(p))) {
   const side = await page.textContent('#props');
   check(`${who}: si disegna (3 muri selezionati)`, /3 /.test(side), side.slice(0, 60));
   await kb.press('Escape');
+  await kb.press('Escape');
+  await kb.type('3D'); await kb.press('Enter');
+  await page.waitForSelector('.v3d canvas', { timeout: 15000 }).catch(() => {});
+  check(`${who}: la vista 3D si apre anche da disco`, !!(await page.$('.v3d canvas')) && (await page.textContent('#history')).includes('Vista 3D'), (await page.textContent('#history')).slice(-120));
+  await kb.press('Escape');
   const ch = page.waitForEvent('filechooser');
   await kb.type('IMPORTA'); await kb.press('Enter');
   await (await ch).setFiles(junkDwg);

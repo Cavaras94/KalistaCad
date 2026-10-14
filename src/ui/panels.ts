@@ -1,5 +1,6 @@
 // Pannelli laterali: proprietà della selezione e layer.
 import type { Ent, HatchPattern, HAlign } from '../model/entities';
+import { describeTiles } from '../tools/posa';
 import { TYPE_NAMES, HATCH_NAMES, roomArea, dimValue, fmtNum, retext } from '../model/entities';
 import type { Doc, Layer, LineType } from '../model/document';
 import { LT_NAMES, UNIT_MM } from '../model/document';
@@ -45,6 +46,16 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
     const n = parse(v);
     return n === null || n <= min ? null : ({ ...e, [key]: n } as Ent);
   };
+  const st = doc.settings;
+  // quote del solido nella vista 3D (forme chiuse): base e cima; cima 0 = nessun solido
+  const zOf = (e: Ent) => (e as { z?: [number, number] }).z;
+  const solid3: Field[] = [
+    { label: 'Solido 3D: base', kind: 'num', get: e => zOf(e)?.[0] ?? 0, set: (e, v) => { const n = parse(v); const z = zOf(e); return n === null || n < 0 ? null : ({ ...e, z: [n, Math.max(z?.[1] ?? 0, n)] } as Ent); } },
+    {
+      label: 'Solido 3D: cima (0 = no)', kind: 'num', get: e => zOf(e)?.[1] ?? 0,
+      set: (e, v) => { const n = parse(v); if (n === null || n < 0) return null; const c = { ...e } as Ent & { z?: [number, number] }; const b = zOf(e)?.[0] ?? 0; if (n > b) c.z = [b, n]; else delete c.z; return c; },
+    },
+  ];
   switch (type) {
     case 'line': return [
       { label: 'Lunghezza', kind: 'ro', single: true, get: e => e.t === 'line' ? fmt(dist(e.a, e.b)) : '' },
@@ -57,15 +68,22 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
         label: 'Riempimento', kind: 'select', options: [['', 'Normale'], ...(Object.entries(HATCH_NAMES) as [string, string][])], get: e => (e.t === 'wall' ? e.pat ?? '' : ''),
         set: (e, v) => { if (e.t !== 'wall') return null; const c = { ...e }; if (v) c.pat = v as HatchPattern; else { delete c.pat; delete c.sp; } return c; },
       },
+      { label: 'Altezza (3D)', kind: 'num', get: e => (e.t === 'wall' ? e.h ?? st.wallH : 0), set: numSet('h') },
       { label: 'Passo retino', kind: 'num', get: e => (e.t === 'wall' ? e.sp ?? Math.round((e.th / 3) * 1000) / 1000 : 0), set: (e, v) => (e.t === 'wall' && e.pat ? numSet('sp')(e, v) : null) },
     ];
     case 'door': return [
       { label: 'Larghezza', kind: 'num', get: e => (e.t === 'door' ? e.w : 0), set: numSet('w') },
+      { label: 'Altezza (3D)', kind: 'num', get: e => (e.t === 'door' ? e.h ?? st.doorH : 0), set: numSet('h') },
       { label: 'Inverti verso', kind: 'button', set: e => (e.t === 'door' ? { ...e, sw: (-e.sw) as 1 | -1 } : null) },
       { label: 'Inverti cerniera', kind: 'button', set: e => (e.t === 'door' ? { ...e, hg: (-e.hg) as 1 | -1 } : null) },
     ];
-    case 'window': return [{ label: 'Larghezza', kind: 'num', get: e => (e.t === 'window' ? e.w : 0), set: numSet('w') }];
-    case 'circle': case 'arc': return [{ label: 'Raggio', kind: 'num', get: e => (e.t === 'circle' || e.t === 'arc' ? e.r : 0), set: numSet('r') }];
+    case 'window': return [
+      { label: 'Larghezza', kind: 'num', get: e => (e.t === 'window' ? e.w : 0), set: numSet('w') },
+      { label: 'Davanzale (3D)', kind: 'num', get: e => (e.t === 'window' ? e.sill ?? st.winSill : 0), set: (e, v) => { const n = parse(v); return n === null || n < 0 || e.t !== 'window' ? null : { ...e, sill: n }; } },
+      { label: 'Altezza (3D)', kind: 'num', get: e => (e.t === 'window' ? e.h ?? st.winH : 0), set: numSet('h') },
+    ];
+    case 'circle': return [{ label: 'Raggio', kind: 'num', get: e => (e.t === 'circle' ? e.r : 0), set: numSet('r') }, ...solid3];
+    case 'arc': return [{ label: 'Raggio', kind: 'num', get: e => (e.t === 'arc' ? e.r : 0), set: numSet('r') }];
     case 'text': return [
       { label: 'Testo', kind: 'text', multi: true, get: e => (e.t === 'text' ? e.s : ''), set: (e, v) => (e.t === 'text' && v.trim() ? retext(e, v.trimEnd()) : null) },
       { label: 'Altezza', kind: 'num', get: e => (e.t === 'text' ? e.h : 0), set: numSet('h') },
@@ -83,6 +101,8 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
     case 'room': return [
       { label: 'Nome', kind: 'text', multi: true, get: e => (e.t === 'room' ? e.name : ''), set: (e, v) => (e.t === 'room' ? { ...e, name: v.trim() } : null) },
       { label: 'Superficie m²', kind: 'ro', single: true, get: e => (e.t === 'room' ? fmtNum(roomArea(e) * toM2, 2) : '') },
+      { label: 'Pavimento', kind: 'ro', single: true, get: e => (e.t === 'room' ? (e.floor ? describeTiles(e.floor, UNIT_MM[u]) : '— (comando PIASTRELLE)') : '') },
+      { label: 'Rivestimento', kind: 'ro', single: true, get: e => (e.t === 'room' ? (e.clad ? `${describeTiles(e.clad, UNIT_MM[u])}, alto ${fmt((e.clad.hgt * UNIT_MM[u]) / 10)} cm` : '—') : '') },
     ];
     case 'point': return [];
     case 'image': return [
@@ -97,6 +117,7 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
     case 'ellipse': return [
       { label: 'Semiasse', kind: 'ro', single: true, get: e => (e.t === 'ellipse' ? fmt(Math.hypot(e.a.x, e.a.y)) : '') },
       { label: 'Altro semiasse', kind: 'ro', single: true, get: e => (e.t === 'ellipse' ? fmt(Math.hypot(e.a.x, e.a.y) * e.k) : '') },
+      ...solid3,
     ];
     case 'spline': return [
       { label: 'Chiusa', kind: 'bool', get: e => (e.t === 'spline' ? e.closed : false), set: (e, v) => (e.t === 'spline' ? { ...e, closed: v === 'true' } : null) },
@@ -116,6 +137,7 @@ function fieldsFor(type: Ent['t'], doc: Doc): Field[] {
       { label: 'Chiusa', kind: 'bool', get: e => (e.t === 'poly' ? e.closed : false), set: (e, v) => (e.t === 'poly' ? { ...e, closed: v === 'true' } : null) },
       { label: 'Vertici', kind: 'ro', single: true, get: e => (e.t === 'poly' ? e.pts.length : '') },
       { label: 'Area', kind: 'ro', single: true, get: e => (e.t === 'poly' && e.closed ? `${fmtNum(Math.abs(polygonArea(e.pts)) * toM2, 2)} m²` : '—') },
+      ...solid3,
     ];
   }
 }

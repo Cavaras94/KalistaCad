@@ -1,6 +1,6 @@
 // Finestre di dialogo.
 import type { Doc, Settings, Units } from '../model/document';
-import { UNIT_LABEL } from '../model/document';
+import { UNIT_LABEL, UNIT_MM } from '../model/document';
 import type { SnapKind } from '../model/entities';
 import type { SnapSettings } from '../view/snap';
 import { SNAP_LABEL } from '../view/snap';
@@ -8,7 +8,9 @@ import { COMMANDS } from './commands';
 import { VERSION_LONG } from './logo';
 import type { Box } from '../model/geom';
 import { boxValid } from '../model/geom';
-import type { Prim } from '../model/entities';
+import type { Prim, RoomE } from '../model/entities';
+import { roomComputo } from '../model/computo';
+import { describeTiles } from '../tools/posa';
 import { primsBox, fmtNum as fmtDec } from '../model/entities';
 import type { FormSpec, FormValues, FormField } from '../tools/base';
 import { paint } from '../view/render';
@@ -246,7 +248,7 @@ export function formDialog(spec: FormSpec): Promise<FormValues | null> {
     const shown: { f: FormField; node: Element }[] = [];
     const visible = (f: FormField) => !f.when || chosen[f.when[0]] === f.when[1];
     const sync = () => { for (const { f, node } of shown) (node as HTMLElement).style.display = visible(f) ? '' : 'none'; };
-    for (const f of spec.fields) if (f.k === 'choice') chosen[f.key] = f.value;
+    for (const f of spec.fields) if (f.k === 'choice') chosen[f.key] = f.value; else if (f.k === 'check') chosen[f.key] = String(f.value);
     for (const f of spec.fields) {
       const before = body.childElementCount;
       if (f.k === 'num') {
@@ -284,16 +286,25 @@ export function formDialog(spec: FormSpec): Promise<FormValues | null> {
         body.append(el('div', { class: 'field' }, el('span', {}, f.label), grid));
         read.push(() => [f.key, val]);
         setTimeout(() => grid.querySelector('.tile.on')?.scrollIntoView({ block: 'nearest' }), 0);
-      } else {
+      } else if (f.k === 'check') {
         const c = el('input', { type: 'checkbox', name: f.key });
         c.checked = f.value;
+        c.onchange = () => { chosen[f.key] = String(c.checked); sync(); };
         body.append(el('label', { class: 'check' }, c, ` ${f.label}`));
         read.push(() => [f.key, c.checked]);
+      } else if (f.k === 'color') {
+        const c = el('input', { type: 'color', name: f.key, value: f.value });
+        body.append(el('label', { class: 'field' }, el('span', {}, f.label), c));
+        read.push(() => [f.key, c.value]);
+      } else {
+        body.append(el('div', { class: 'form-head' }, f.label));
       }
       if (f.when) {
         shown.push({ f, node: body.children[before] });
-        const r = read.pop()!;
-        read.push(() => (visible(f) ? r() : [f.key, f.value]));
+        if (f.k !== 'head') {
+          const r = read.pop()!;
+          read.push(() => (visible(f) ? r() : [f.key, f.value]));
+        }
       }
     }
     sync();
@@ -329,6 +340,64 @@ export function yesNoDialog(title: string, text: string, def: boolean): Promise<
     const obs = new MutationObserver(() => { if (!document.body.contains(body)) { obs.disconnect(); if (!done) resolve(null); } });
     obs.observe(document.getElementById('dialog-root')!, { childList: true });
   });
+}
+
+/** Computo dei materiali di tutti i locali con le piastrelle: m², pezzi e scatole, con lo sfrido. */
+export function computoDialog(doc: Doc) {
+  const rooms = doc.ents.filter((e): e is RoomE => e.t === 'room' && (!!e.floor || !!e.clad));
+  const um = UNIT_MM[doc.settings.units];
+  const body = el('div', { class: 'computo' });
+  if (!rooms.length) {
+    body.append(el('p', {}, 'Nessun locale ha le piastrelle. Per metterle: comando PIASTRELLE, poi un clic dentro il locale.'));
+    modal('Computo dei materiali', body, [{ label: 'Chiudi', primary: true }]);
+    return;
+  }
+  const sf = el('input', { type: 'text', placeholder: 'come consigliato', inputmode: 'decimal', name: 'sfrido' });
+  body.append(el('label', { class: 'field inline-field' }, el('span', {}, 'Sfrido in più (%)'), sf,
+    el('small', {}, 'Vuoto = quello consigliato per la posa: 10% dritta e sfalsata, 15% spina di pesce e diagonale.')));
+  const table = el('table', { class: 'computo-table' });
+  body.append(table);
+  const m2 = (x: number) => fmtDec(x, 2);
+  let tsv = '';
+  const draw = () => {
+    const n = parseFloat(sf.value.replace(',', '.'));
+    const sfrido = Number.isFinite(n) && n >= 0 ? n : undefined;
+    table.innerHTML = '';
+    const head = ['Locale', 'Cosa', 'Piastrella', 'm²', 'Sfrido', 'Pezzi', 'Scatole'];
+    table.append(el('tr', {}, ...head.map(x => el('th', {}, x))));
+    const lines = [head];
+    const tot = new Map<string, { m2: number; pcs: number; boxes: number; noBox: boolean }>();
+    for (const r of rooms) {
+      const q = roomComputo(doc, r, sfrido);
+      for (const [what, x] of [['Pavimento', q.floor], ['Rivestimento', q.clad]] as const) {
+        if (!x) continue;
+        const desc = describeTiles(x.t, um) + (what === 'Rivestimento' ? `, alto ${fmtDec((q.clad!.t.hgt * um) / 10, 0)} cm` : '');
+        const row = [r.name || 'Locale', what, desc, m2(x.m2), `${x.sfrido}%`, String(x.pcs), x.boxes === undefined ? '—' : String(x.boxes)];
+        lines.push(row);
+        table.append(el('tr', {}, ...row.map((c, i) => el('td', i >= 3 ? { class: 'num' } : {}, c))));
+        // totali per formato e colore uguali: è quello che si ordina
+        const key = `${describeTiles(x.t, um)} ${x.t.color}`;
+        const t = tot.get(key) ?? { m2: 0, pcs: 0, boxes: 0, noBox: false };
+        t.m2 += x.m2; t.pcs += x.pcs; if (x.boxes === undefined) t.noBox = true; else t.boxes += x.boxes;
+        tot.set(key, t);
+      }
+    }
+    if (tot.size > 1 || rooms.length > 1) {
+      table.append(el('tr', { class: 'sep' }, el('th', { colspan: '7' }, 'Totale per piastrella')));
+      for (const [k, t] of tot) {
+        const row = ['', 'Totale', k.replace(/ #[0-9a-f]{6}$/i, ''), m2(t.m2), '', String(t.pcs), t.noBox ? '—' : String(t.boxes)];
+        lines.push(row);
+        table.append(el('tr', { class: 'tot' }, ...row.map((c, i) => el('td', i >= 3 ? { class: 'num' } : {}, c))));
+      }
+    }
+    tsv = lines.map(l => l.join(String.fromCharCode(9))).join(String.fromCharCode(10));
+  };
+  sf.oninput = draw;
+  draw();
+  modal('Computo dei materiali', body, [
+    { label: 'Copia la tabella', onClick: async () => { try { await navigator.clipboard.writeText(tsv); } catch { /* appunti non disponibili */ } return false; } },
+    { label: 'Chiudi', primary: true },
+  ], true);
 }
 
 /** Legge un file di immagine e lo riduce a una dimensione ragionevole per stare dentro il disegno. */
@@ -461,6 +530,10 @@ export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Setting
   num('Larghezza finestra', 'windowW');
   num('Passo tratteggio', 'hatchSp');
   num('Scala tipi di linea', 'ltScale');
+  num('Altezza muri (3D)', 'wallH');
+  num('Altezza porte (3D)', 'doorH');
+  num('Davanzale finestre (3D)', 'winSill');
+  num('Altezza finestre (3D)', 'winH');
 
   const polar = el('select');
   for (const a of [5, 10, 15, 22.5, 30, 45, 90]) polar.append(el('option', { value: String(a) }, `${String(a).replace('.', ',')}°`));
@@ -487,7 +560,7 @@ export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Setting
         snap.polarInc = parseFloat(polar.value);
         // valori che romperebbero il disegno: decimali fuori misura, spessori e altezze a zero
         s.dimDec = Math.min(8, Math.max(0, Math.round(s.dimDec)));
-        for (const k of ['textH', 'dimH', 'wallTh', 'doorW', 'windowW', 'hatchSp', 'grid', 'ltScale'] as const) if (!(s[k] > 0)) s[k] = doc.settings[k];
+        for (const k of ['textH', 'dimH', 'wallTh', 'doorW', 'windowW', 'hatchSp', 'grid', 'ltScale', 'wallH', 'doorH', 'winH'] as const) if (!(s[k] > 0)) s[k] = doc.settings[k];
         onSave(s, how.value === 'convert');
       },
     },
