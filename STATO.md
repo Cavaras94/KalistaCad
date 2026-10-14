@@ -300,6 +300,11 @@ difetto riprodotto con uno script prima di correggerlo. Corretti:
 
 ## Note
 
+- Progetto pubblico e libero (14 ottobre 2026): https://github.com/Cavaras94/KalistaCad, licenza
+  GPL-3.0 o successiva (file `LICENSE`). La scelta è obbligata da LibreDWG, che è GPL-3.0 ed è
+  dentro la versione da chiavetta: chi la riceve ha diritto al sorgente. La chiavetta porta
+  `LICENZA.txt` e nel LEGGIMI il link al sorgente. `README.md` è la presentazione per chi arriva su GitHub.
+
 - Altezze predefinite: testi 20 cm, quote 15 cm (2 e 1,5 mm su carta a 1:100). Vale per i disegni
   nuovi; quelli già salvati tengono le loro impostazioni.
 - Il collaudo si ferma con un errore se un clic cade fuori dall'area di disegno. Disegna i muri

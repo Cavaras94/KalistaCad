@@ -12,7 +12,7 @@
     "chiavetta": "node scripts/chiavetta.mjs",
     "e2e:chiavetta": "node scripts/chiavetta.mjs && node test/chiavetta.mjs"
   },
-  "license": "UNLICENSED",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "dependencies": {
     "@mlightcad/libredwg-web": "^0.7.16",

@@ -6,7 +6,7 @@
 // tutto il programma finisce dentro Kalista.html, e il lettore DWG (WebAssembly) in uno script a
 // parte, kalista-dwg.js, che la pagina carica solo quando serve.
 import { build } from 'vite';
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -47,6 +47,8 @@ rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 writeFileSync(join(out, 'Kalista.html'), html);
 writeFileSync(join(out, 'kalista-dwg.js'), `window.__KALISTA_DWG="${readFileSync(only('.wasm')).toString('base64')}";\n`);
+// la licenza va insieme al programma, a chiunque lo si dia
+copyFileSync(join(root, 'LICENSE'), join(out, 'LICENZA.txt'));
 writeFileSync(join(out, 'LEGGIMI.txt'), [
   `KALISTA ${version} - disegno di planimetrie`,
   `Versione ${version} del ${today}. La stessa scritta compare in alto a sinistra nel programma,`,
@@ -62,6 +64,12 @@ writeFileSync(join(out, 'LEGGIMI.txt'), [
   'propria: il salvataggio automatico resta solo nel browser di quel computer.',
   '',
   'Comandi: scrivere ? e premere Invio, oppure premere F1.',
+  '',
+  'Kalista è software libero, sotto licenza GNU GPL versione 3 o successiva: si può usare,',
+  'copiare, modificare e ridistribuire, con la stessa licenza e insieme al codice sorgente.',
+  'Non c\'è alcuna garanzia. Il testo della licenza è in LICENZA.txt; il codice sorgente è qui:',
+  'https://github.com/Cavaras94/KalistaCad',
+  'Per i DWG usa LibreDWG (GPL-3.0), per i DXF dxf-parser (MIT).',
   '',
 ].join('\r\n'));
 rmSync(tmp, { recursive: true, force: true });
