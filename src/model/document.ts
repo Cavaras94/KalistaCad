@@ -21,7 +21,10 @@ export interface Settings {
   units: Units;
   textH: number;
   dimH: number;
+  /** decimali massimi delle quote */
   dimDec: number;
+  /** quote con gli zeri finali (3,00): di solito solo in metri */
+  dimZeros: boolean;
   wallTh: number;
   doorW: number;
   windowW: number;
@@ -66,7 +69,9 @@ export function defaultSettings(units: Units = 'cm'): Settings {
     units,
     textH: 20 * k, // 2 mm su carta a 1:100, 4 mm a 1:50
     dimH: 15 * k,
-    dimDec: units === 'm' ? 2 : 0,
+    // in cm il mezzo centimetro (152,5) si vede; le misure intere restano senza virgola
+    dimDec: units === 'm' ? 2 : units === 'cm' ? 1 : 0,
+    dimZeros: units === 'm',
     wallTh: 30 * k,
     doorW: 80 * k,
     windowW: 120 * k,
@@ -379,8 +384,8 @@ export class Doc {
     this.blocks = Object.fromEntries(Object.entries(this.blocks).map(([k, d]) => [k, { ents: d.ents.map(conv) }]));
     const s: Settings = { ...this.settings, units: to };
     for (const k of LENGTH_KEYS) s[k] = Math.round(s[k] * f * 1e9) / 1e9;
-    if (to === 'm') s.dimDec = Math.max(s.dimDec, 2);
-    else if (from === 'm' && s.dimDec === 2) s.dimDec = 0;
+    if (to === 'm') { s.dimDec = Math.max(s.dimDec, 2); s.dimZeros = true; }
+    else if (from === 'm') { if (s.dimDec === 2) s.dimDec = to === 'cm' ? 1 : 0; s.dimZeros = false; }
     this.settings = s;
   }
 
@@ -446,6 +451,7 @@ export class Doc {
     const ctx: PrimCtx = {
       dimH: this.settings.dimH,
       dimDec: this.settings.dimDec,
+      dimZeros: this.settings.dimZeros,
       areaDiv: (1000 / UNIT_MM[this.settings.units]) ** 2,
       walls: buildWallCtx(this.ents),
       blocks: this.blocks,
@@ -497,6 +503,12 @@ export class Doc {
     this.cartiglio = { ...emptyCartiglio(), ...d.cartiglio };
     this.layers = d.layers?.length ? d.layers : defaultLayers();
     this.settings = { ...defaultSettings(d.settings?.units ?? 'cm'), ...d.settings };
+    // file di prima della 0.5.1: i decimali erano fissi, e in cm 0 arrotondava 152,5 a 153.
+    // Ora sono decimali massimi senza zeri finali, quindi uno in più non cambia le misure intere.
+    if (d.settings && !('dimZeros' in d.settings)) {
+      this.settings.dimZeros = this.settings.units === 'm';
+      if (this.settings.units === 'cm' && this.settings.dimDec === 0) this.settings.dimDec = 1;
+    }
     this.current = this.layers.some(l => l.name === d.current) ? d.current : this.layers[0].name;
     // un ciclo, non Math.max(...): con centinaia di migliaia di entità gli argomenti non starebbero nello stack
     let next = Math.max(d.nextId ?? 1, 1);

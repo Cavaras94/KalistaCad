@@ -519,7 +519,12 @@ export function settingsDialog(doc: Doc, snap: SnapSettings, onSave: (s: Setting
   num('Passo snap (F9)', 'snap');
   num('Altezza testo', 'textH');
   num('Altezza testo quote', 'dimH');
-  num('Decimali quote', 'dimDec');
+  num('Decimali quote (al massimo)', 'dimDec');
+  const zeros = el('select', { name: 'dim-zeros' });
+  zeros.append(el('option', { value: 'false' }, 'Solo se servono: 300 · 152,5'), el('option', { value: 'true' }, 'Sempre tutti: 300,0 · 152,5'));
+  zeros.value = String(!!s.dimZeros);
+  zeros.onchange = () => { s.dimZeros = zeros.value === 'true'; };
+  body.append(el('label', { class: 'field' }, el('span', {}, 'Decimali delle quote'), zeros));
   const arrows = el('select');
   arrows.append(el('option', { value: 'false' }, 'Tratti obliqui'), el('option', { value: 'true' }, 'Frecce'));
   arrows.value = String(!!s.dimArrow);

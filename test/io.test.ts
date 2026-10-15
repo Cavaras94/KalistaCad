@@ -112,6 +112,7 @@ describe('unità del disegno', () => {
     expect(doc.settings.textH).toBe(0.2);
     expect(doc.settings.grid).toBe(0.5);
     expect(doc.settings.dimDec).toBe(2);
+    expect(doc.settings.dimZeros).toBe(true);
     expect((doc.ents[2] as { h?: number }).h).toBeCloseTo(0.25, 12);
     expect(roomArea(doc.ents[1] as RoomE) / doc.ctx().areaDiv).toBeCloseTo(areaBefore, 9);
     expect(areaBefore).toBeCloseTo(20, 9);
@@ -144,7 +145,8 @@ describe('unità del disegno', () => {
     doc.edit('Cambio unità', () => doc.convertUnits('cm'));
     expect((doc.ents[0] as WallE).b.x).toBeCloseTo(500, 9);
     expect(doc.settings.wallTh).toBe(30);
-    expect(doc.settings.dimDec).toBe(0);
+    expect(doc.settings.dimDec).toBe(1);
+    expect(doc.settings.dimZeros).toBe(false);
     doc.undo();
     expect(doc.settings.units).toBe('m');
     expect((doc.blocks.sedia.ents[0] as CircleE).r).toBeCloseTo(0.1, 12);

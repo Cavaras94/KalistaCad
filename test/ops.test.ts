@@ -554,5 +554,30 @@ describe('varie', () => {
     const txt = ps.find(p => p.k === 'text');
     expect(txt && txt.k === 'text' && txt.s).toBe('300');
   });
+  it('la quota tiene i decimali che servono, senza zeri finali', () => {
+    const txt = (b: number, dimDec: number, dimZeros?: boolean) => {
+      const t = prims({ id: 1, layer: '0', t: 'dim', a: v(0, 0), b: v(b, 0), p: v(0, 100), ang: 0 }, { dimH: 10, dimDec, dimZeros, areaDiv: 1e4 }).find(p => p.k === 'text');
+      return t && t.k === 'text' ? t.s : '';
+    };
+    expect(txt(152.5, 1)).toBe('152,5');
+    expect(txt(300, 1)).toBe('300');
+    expect(txt(299.98, 1)).toBe('300');
+    expect(txt(152.25, 2)).toBe('152,25');
+    expect(txt(152.5, 2)).toBe('152,5');
+    expect(txt(3, 2, true)).toBe('3,00');
+    expect(txt(152.5, 0)).toBe('153');
+  });
+  it('i disegni salvati prima della 0.5.1 in cm mostrano il mezzo centimetro', () => {
+    const doc = new Doc();
+    const old = { ...doc.toData(), settings: { ...doc.settings, dimDec: 0 } } as ReturnType<Doc['toData']>;
+    delete (old.settings as Partial<typeof old.settings>).dimZeros;
+    doc.load(old);
+    expect(doc.settings.dimDec).toBe(1);
+    expect(doc.settings.dimZeros).toBe(false);
+    // chi sceglie 0 decimali dopo, lo ritrova così alla riapertura
+    const now = { ...doc.toData(), settings: { ...doc.settings, dimDec: 0 } };
+    doc.load(JSON.parse(JSON.stringify(now)));
+    expect(doc.settings.dimDec).toBe(0);
+  });
   it('TAU è un giro', () => close(TAU, 2 * Math.PI));
 });

@@ -348,7 +348,7 @@ export class App implements Host {
   private previewCtx(list: Ent[]): PrimCtx {
     const s = this.doc.settings;
     const base = this.doc.ctx();
-    return { dimH: s.dimH, dimDec: s.dimDec, areaDiv: base.areaDiv, walls: list.some(e => e.t === 'wall') ? buildWallCtx(list) : undefined, blocks: base.blocks };
+    return { dimH: s.dimH, dimDec: s.dimDec, dimZeros: s.dimZeros, areaDiv: base.areaDiv, walls: list.some(e => e.t === 'wall') ? buildWallCtx(list) : undefined, blocks: base.blocks };
   }
 
   private paintTemp(g: CanvasRenderingContext2D, list: NewEnt[], ghost: boolean) {

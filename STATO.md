@@ -52,6 +52,10 @@ La versione è quella di `package.json` e compare in alto a sinistra accanto al 
 si legge anche la data), nella prima riga della riga di comando, in F1 e nel LEGGIMI della chiavetta.
 Prima di distribuire una copia nuova: aumentare la versione in `package.json`, poi `crea-chiavetta.bat`.
 
+- 0.5.1 (15 ottobre 2026): le quote non arrotondano più al centimetro. "Decimali quote" ora è il numero
+  massimo di decimali e gli zeri finali si tolgono (152,5 ma 300); in cm il valore proposto è 1. Una
+  nuova scelta in Impostazioni li tiene sempre (in metri è così: 3,00). I disegni salvati prima in cm
+  con 0 decimali passano a 1 all'apertura; le misure intere restano uguali.
 - 0.5.0 (14 ottobre 2026): 3D e piastrelle (vedi "Versione 0.5.0" più sotto): vista 3D ricavata dalla
   pianta, pavimenti e rivestimenti con il computo, libreria di sanitari e arredi, immagine ed export
   glTF/OBJ.

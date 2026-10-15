@@ -108,7 +108,10 @@ export type Prim =
 
 export interface PrimCtx {
   dimH: number;
+  /** decimali massimi delle quote */
   dimDec: number;
+  /** quote con tutti i decimali, anche gli zeri finali (3,00 invece di 3) */
+  dimZeros?: boolean;
   /** unità² per m² */
   areaDiv: number;
   walls?: WallCtx;
@@ -118,10 +121,17 @@ export interface PrimCtx {
   dimArrow?: boolean;
 }
 
-export const DEFAULT_CTX: PrimCtx = { dimH: 15, dimDec: 0, areaDiv: 10000 };
+export const DEFAULT_CTX: PrimCtx = { dimH: 15, dimDec: 1, areaDiv: 10000 };
 
 export function fmtNum(x: number, dec: number): string {
   return x.toFixed(Math.min(8, Math.max(0, Math.round(dec) || 0))).replace('.', ',');
+}
+
+/** Numero di una quota: al massimo dec decimali; senza zeros quelli finali a zero si tolgono (152,5 ma 300). */
+export function fmtDimNum(x: number, dec: number, zeros = false): string {
+  let s = fmtNum(x, dec);
+  if (!zeros && s.includes(',')) s = s.replace(/0+$/, '').replace(/,$/, '');
+  return s === '-0' ? '0' : s;
 }
 
 /** Disposizione delle righe di un testo, in coordinate locali (prima della rotazione). */
@@ -222,7 +232,7 @@ export function dimText(e: DimE, ctx: PrimCtx): string {
   const x = dimValue(e);
   if (x === null) return '';
   if (e.k === 'ang') return `${(Math.round(x * 10) / 10).toString().replace('.', ',')}°`;
-  return (e.k === 'rad' ? 'R' : e.k === 'dia' ? 'Ø' : '') + fmtNum(x, ctx.dimDec);
+  return (e.k === 'rad' ? 'R' : e.k === 'dia' ? 'Ø' : '') + fmtDimNum(x, ctx.dimDec, ctx.dimZeros);
 }
 
 /** Rotazione leggibile (testo mai capovolto) per una direzione. */
@@ -313,7 +323,7 @@ function dimPrims(e: DimE, ctx: PrimCtx): Prim[] {
   }
   const rot = readableAngle(Math.atan2(g.u.y, g.u.x));
   const up = perp(dirOf(rot));
-  const s = e.s ?? fmtNum(g.value, ctx.dimDec);
+  const s = e.s ?? fmtDimNum(g.value, ctx.dimDec, ctx.dimZeros);
   // se fra le linee di estensione il testo non ci sta, va di fianco, oltre la seconda
   const tw = s.length * H * CHAR_W, span = dist(g.a2, g.b2);
   const along = span > 1e-9 ? norm(sub(g.b2, g.a2)) : g.u;
